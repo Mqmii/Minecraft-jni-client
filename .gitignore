@@ -1,0 +1,39 @@
+# Build directories
+build/
+cmake-build-*/
+
+# CMake generated files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+install_manifest.txt
+Makefile
+build.ninja
+ninja.build
+ninja.log
+.ninja_deps
+.ninja_log
+
+# Binaries and intermediate artifacts
+*.obj
+*.o
+*.a
+*.lib
+*.dll
+*.dll.a
+*.exe
+*.exp
+*.pdb
+*.ilk
+
+# IDE / editor files
+.idea/
+.vs/
+*.iml
+*.sln
+*.vcxproj*
+
+# OS junk
+.DS_Store
+Thumbs.db
