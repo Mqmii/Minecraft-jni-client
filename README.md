@@ -1,7 +1,5 @@
-# MinecraftWrapperJNI
-
 JNI Cheat/Dll with ImGui overlay and runtime hooks.
-
+Works on 1.21.11 and 1.21.11 Fabric fabric-loader-0.18.4-1.21.11
 ## Features
 
 - Fast Break
