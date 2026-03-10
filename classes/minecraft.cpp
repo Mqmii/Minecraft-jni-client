@@ -1,12 +1,17 @@
 ﻿#include "minecraft.hpp"
 
 #include <iostream>
+
+#include "../jni/MinecraftMappings.hpp"
 Minecraft::Minecraft(JNIEnv *p_env): env(p_env) {
-    jclass localClass = env->FindClass("gfj");
+    jclass localClass = env->FindClass(mc_mappings::classes::Minecraft);
     minecraftClass = (jclass) env->NewGlobalRef(localClass);
     env->DeleteLocalRef(localClass);
 
-    jfieldID fidInstance = env->GetStaticFieldID(minecraftClass, "A", "Lgfj;");
+    jfieldID fidInstance = env->GetStaticFieldID(
+        minecraftClass,
+        mc_mappings::minecraft::Instance.name,
+        mc_mappings::minecraft::Instance.signature);
     jobject localInstance = env->GetStaticObjectField(minecraftClass, fidInstance);
 
     mcInstance = env->NewGlobalRef(localInstance);
@@ -22,7 +27,10 @@ jclass Minecraft::getMinecraftClass() {
 }
 
 void Minecraft::fullBright() const {
-    jfieldID fid_options = env->GetFieldID(minecraftClass, "k", "Lgfo;");
+    jfieldID fid_options = env->GetFieldID(
+        minecraftClass,
+        mc_mappings::minecraft::Options.name,
+        mc_mappings::minecraft::Options.signature);
     if (fid_options == nullptr) {
         std::cout << "[ERROR] options field ID not found." << std::endl;
     }
@@ -31,7 +39,10 @@ void Minecraft::fullBright() const {
         std::cout << "[ERROR] options object not found." << std::endl;
     }
     jclass clsOptions = env->GetObjectClass(options_obj);
-    jfieldID gamma_fid = env->GetFieldID(clsOptions, "di", "Lgfn;");
+    jfieldID gamma_fid = env->GetFieldID(
+        clsOptions,
+        mc_mappings::options::Gamma.name,
+        mc_mappings::options::Gamma.signature);
     if (gamma_fid == nullptr) {
         std::cout << "[ERROR] gamma field ID not found." << std::endl;
     }
@@ -41,13 +52,19 @@ void Minecraft::fullBright() const {
     }
 
     jclass clsOptionInstance = env->GetObjectClass(gamma_obj);
-    jfieldID fid_value = env->GetFieldID(clsOptionInstance, "k", "Ljava/lang/Object;");
+    jfieldID fid_value = env->GetFieldID(
+        clsOptionInstance,
+        mc_mappings::option_instance::Value.name,
+        mc_mappings::option_instance::Value.signature);
     if (fid_value == nullptr) {
         std::cout << "[ERROR] value field ID not found." << std::endl;
     }
 
-    jclass clsDouble = env->FindClass("java/lang/Double");
-    jmethodID mid_DoubleInit = env->GetMethodID(clsDouble, "<init>", "(D)V");
+    jclass clsDouble = env->FindClass(mc_mappings::classes::JavaDouble);
+    jmethodID mid_DoubleInit = env->GetMethodID(
+        clsDouble,
+        mc_mappings::java_double::Constructor.name,
+        mc_mappings::java_double::Constructor.signature);
     jobject newGammaValue = env->NewObject(clsDouble, mid_DoubleInit, 1000.0);
 
     env->SetObjectField(gamma_obj, fid_value, newGammaValue);

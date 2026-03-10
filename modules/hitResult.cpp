@@ -3,13 +3,17 @@
 #include "../classes/minecraft.hpp"
 #include "click.hpp"
 #include "../classes/Entity.hpp"
+#include "../jni/MinecraftMappings.hpp"
 HitResult::HitResult(JNIEnv *p_env, Minecraft *p_mc) : env(p_env), mc(p_mc), hitResultClass(nullptr),
                                                        hitResultFieldID(nullptr) {
-    jclass localClass = env->FindClass("ftk");
+    jclass localClass = env->FindClass(mc_mappings::classes::HitResult);
     hitResultClass = reinterpret_cast<jclass>(env->NewGlobalRef(localClass));
     env->DeleteLocalRef(localClass);
 
-    hitResultFieldID = env->GetFieldID(mc->getMinecraftClass(), "u", "Lftk;");
+    hitResultFieldID = env->GetFieldID(
+        mc->getMinecraftClass(),
+        mc_mappings::minecraft::HitResult.name,
+        mc_mappings::minecraft::HitResult.signature);
     if (hitResultFieldID == nullptr) {
         std::cout << "[ERROR] HitResult field ID not found." << std::endl;
     }
@@ -21,7 +25,7 @@ jobject HitResult::getHitResultObject() const {
 }
 
 BlockHitResult::BlockHitResult(JNIEnv *p_env, Minecraft *p_mc) : HitResult(p_env, p_mc) {
-    jclass localclass = env->FindClass("fti");
+    jclass localclass = env->FindClass(mc_mappings::classes::BlockHitResult);
     clsBlockHitresult = reinterpret_cast<jclass>(env->NewGlobalRef(localclass));
     env->DeleteLocalRef(localclass);
     if (clsBlockHitresult == nullptr) {
@@ -40,35 +44,47 @@ void BlockHitResult::isBlock() const {
 }
 
 EntityHitResult::EntityHitResult(JNIEnv *p_env, Minecraft *p_mc) : HitResult(p_env, p_mc) {
-    jclass localclass = env->FindClass("ftj");
+    jclass localclass = env->FindClass(mc_mappings::classes::EntityHitResult);
     if (localclass == nullptr) {
         std::cout << "[ERROR] EntityHitResult class not found." << std::endl;
     }
     clsEntityHitResult = reinterpret_cast<jclass>(env->NewGlobalRef(localclass));
     env->DeleteLocalRef(localclass);
-    getEntityMethodID = env->GetMethodID(clsEntityHitResult,"a","()Lcgk;");
+    getEntityMethodID = env->GetMethodID(
+        clsEntityHitResult,
+        mc_mappings::entity_hit_result::GetEntity.name,
+        mc_mappings::entity_hit_result::GetEntity.signature);
     if (getEntityMethodID == nullptr)std::cout << "[ERROR] getEntity method ID not found." << std::endl;
 
-    jclass localPlayer = env->FindClass("ddm");
+    jclass localPlayer = env->FindClass(mc_mappings::classes::Player);
     if (localPlayer == nullptr) std::cout << "[ERROR] Player class not found." << std::endl;
     clsPlayer = reinterpret_cast<jclass>(env->NewGlobalRef(localPlayer));
     env->DeleteLocalRef(localPlayer);
-    jclass localEntity = env->FindClass("cgk");
+    jclass localEntity = env->FindClass(mc_mappings::classes::Entity);
     if (!localEntity) std::cout << "[ERROR] Entity class not found." << std::endl;
-    getNameMethodID = env->GetMethodID(localEntity,"ap","()Lyh;");
+    getNameMethodID = env->GetMethodID(
+        localEntity,
+        mc_mappings::entity::GetName.name,
+        mc_mappings::entity::GetName.signature);
     if (getNameMethodID == nullptr) std::cout << "[ERROR] getName method ID not found." << std::endl;
     env->DeleteLocalRef(localEntity);
 
-    jclass localComponent = env->FindClass("yh");
+    jclass localComponent = env->FindClass(mc_mappings::classes::Component);
     if (localComponent == nullptr) std::cout << "[ERROR] Component class not found." << std::endl;
-    getStringMethodID = env->GetMethodID(localComponent,"getString","()Ljava/lang/String;");
+    getStringMethodID = env->GetMethodID(
+        localComponent,
+        mc_mappings::component::GetString.name,
+        mc_mappings::component::GetString.signature);
     if (getStringMethodID == nullptr) std::cout << "[ERROR] getString method ID not found." << std::endl;
-    jclass localentitycls = env->FindClass("cgk");
+    jclass localentitycls = env->FindClass(mc_mappings::classes::Entity);
     if (localentitycls == nullptr) {
         std::cout << "[ERROR] Entity class not found." << std::endl;
     }
     clsEntity = reinterpret_cast<jclass>(env->NewGlobalRef(localentitycls));
-    mid_isAlive = env->GetMethodID(clsEntity,"cb","()Z");
+    mid_isAlive = env->GetMethodID(
+        clsEntity,
+        mc_mappings::entity::IsAlive.name,
+        mc_mappings::entity::IsAlive.signature);
     if (mid_isAlive == nullptr) {
         std::cout << "[ERROR] isAlive method not found." << std::endl;
     }
@@ -121,7 +137,10 @@ void EntityHitResult::isEntity() const {
     env->DeleteLocalRef(nameJstr);
 }
 bool EntityHitResult::isAttackReady() const {
-    jmethodID mid_GetStregth = env->GetMethodID(LocalPlayer::getLocalPlayerClass(),"I","(F)F");
+    jmethodID mid_GetStregth = env->GetMethodID(
+        LocalPlayer::getLocalPlayerClass(),
+        mc_mappings::local_player::AttackStrengthScale.name,
+        mc_mappings::local_player::AttackStrengthScale.signature);
     if (mid_GetStregth == nullptr) {
         std::cout << "[ERROR] getAttackStrength method not found." << std::endl;
         return false;
