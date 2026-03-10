@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#include <atomic>
 #include <windows.h>
 
 #include "ImGuiMenu.hpp"
@@ -20,6 +21,7 @@ private:
     using SwapBuffersFn = BOOL(WINAPI *)(HDC);
     using WndProcFn = LRESULT(CALLBACK *)(HWND, UINT, WPARAM, LPARAM);
 
+    bool TryInstallHooks();
     bool IsValidGameWindow(HWND hWnd) const;
     BOOL RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn);
 
@@ -32,9 +34,14 @@ private:
 
     ImGuiMenu menu_;
     HWND window_ = nullptr;
+    void *swapBuffersTarget_ = nullptr;
+    void *wglSwapBuffersTarget_ = nullptr;
     SwapBuffersFn originalSwapBuffers_ = nullptr;
     SwapBuffersFn originalWglSwapBuffers_ = nullptr;
     WndProcFn originalWndProc_ = nullptr;
     bool minHookInitialized_ = false;
     bool wndProcHooked_ = false;
+    bool swapHookInstalled_ = false;
+    bool wglHookInstalled_ = false;
+    std::atomic_bool shuttingDown_ = false;
 };

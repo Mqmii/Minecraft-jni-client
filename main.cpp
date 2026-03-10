@@ -33,7 +33,16 @@ void MainThread(HMODULE hModule) {
     std::cout << "[+] Press 'DELETE' to exit." << std::endl;
 
     UiHookManager uiHookManager;
-    uiHookManager.Initialize();
+    if (!uiHookManager.Initialize()) {
+        std::cout << "[!] ERROR: Failed to initialize UI hooks." << std::endl;
+        jniEnvironment.Shutdown();
+        Sleep(1000);
+        fclose(stdout);
+        fclose(stdin);
+        FreeConsole();
+        FreeLibraryAndExitThread(hModule, 0);
+        return;
+    }
 
     JNIEnv *p_env = jniEnvironment.GetEnv();
     Minecraft mc(p_env);
@@ -66,6 +75,7 @@ void MainThread(HMODULE hModule) {
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
+        DisableThreadLibraryCalls(hModule);
         HANDLE hThread = CreateThread(nullptr, 0, (LPTHREAD_START_ROUTINE) MainThread, hModule, 0, nullptr);
         if (hThread) CloseHandle(hThread);
     }

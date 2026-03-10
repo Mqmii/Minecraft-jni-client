@@ -26,6 +26,7 @@ bool ImGuiMenu::Initialize(HWND window) {
         return false;
     }
 
+    window_ = window;
     initialized_ = true;
     return true;
 }
@@ -35,17 +36,60 @@ void ImGuiMenu::Shutdown() {
         return;
     }
 
+    showMenu_ = false;
+    ApplyMenuInputState();
+
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
 
     initialized_ = false;
+    window_ = nullptr;
 }
 
 void ImGuiMenu::UpdateToggleState() {
-    if ((GetAsyncKeyState(VK_INSERT) & 1) != 0) {
+    const bool insertDown = (GetAsyncKeyState(VK_INSERT) & 0x8000) != 0;
+    if (insertDown && !insertWasDown_) {
         showMenu_ = !showMenu_;
+        ApplyMenuInputState();
     }
+    insertWasDown_ = insertDown;
+}
+
+void ImGuiMenu::ApplyMenuInputState() {
+    if (!initialized_ || window_ == nullptr) {
+        cursorVisibilityAdjustments_ = 0;
+        menuInputEnabled_ = false;
+        return;
+    }
+
+    if (showMenu_ == menuInputEnabled_) {
+        return;
+    }
+
+    ImGui::GetIO().MouseDrawCursor = showMenu_;
+
+    if (showMenu_) {
+        CURSORINFO cursorInfo{};
+        cursorInfo.cbSize = sizeof(cursorInfo);
+        if (GetCursorInfo(&cursorInfo) != FALSE && (cursorInfo.flags & CURSOR_SHOWING) == 0) {
+            while (ShowCursor(TRUE) < 0) {
+                ++cursorVisibilityAdjustments_;
+            }
+            ++cursorVisibilityAdjustments_;
+        }
+        ClipCursor(nullptr);
+        ReleaseCapture();
+        SetCapture(nullptr);
+        SetCursor(LoadCursor(nullptr, IDC_ARROW));
+    } else {
+        while (cursorVisibilityAdjustments_ > 0) {
+            ShowCursor(FALSE);
+            --cursorVisibilityAdjustments_;
+        }
+    }
+
+    menuInputEnabled_ = showMenu_;
 }
 
 void ImGuiMenu::DrawMenu() {
@@ -87,9 +131,15 @@ bool ImGuiMenu::HandleWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         return false;
     }
 
+    if (uMsg == WM_SETCURSOR) {
+        SetCursor(LoadCursor(nullptr, IDC_ARROW));
+        return true;
+    }
+
     ImGui_ImplWin32_WndProcHandler(hWnd, uMsg, wParam, lParam);
 
     switch (uMsg) {
+        case WM_INPUT:
         case WM_LBUTTONDOWN:
         case WM_LBUTTONUP:
         case WM_LBUTTONDBLCLK:

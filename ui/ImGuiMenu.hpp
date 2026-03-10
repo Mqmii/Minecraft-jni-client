@@ -23,10 +23,15 @@ public:
     const ImGuiMenuState &State() const;
 
 private:
+    void ApplyMenuInputState();
     void UpdateToggleState();
     void DrawMenu();
 
     bool initialized_ = false;
     bool showMenu_ = false;
+    bool menuInputEnabled_ = false;
+    bool insertWasDown_ = false;
+    int cursorVisibilityAdjustments_ = 0;
+    HWND window_ = nullptr;
     ImGuiMenuState state_;
 };

@@ -14,6 +14,7 @@ bool UiHookManager::Initialize() {
     }
 
     instance_ = this;
+    shuttingDown_ = false;
 
     const MH_STATUS initStatus = MH_Initialize();
     if (initStatus != MH_OK && initStatus != MH_ERROR_ALREADY_INITIALIZED) {
@@ -22,46 +23,86 @@ bool UiHookManager::Initialize() {
     }
     minHookInitialized_ = true;
 
-    const auto gdiSwapAddr = reinterpret_cast<void *>(GetProcAddress(GetModuleHandleW(L"gdi32.dll"), "SwapBuffers"));
-    const auto wglSwapAddr = reinterpret_cast<void *>(GetProcAddress(GetModuleHandleW(L"opengl32.dll"), "wglSwapBuffers"));
-
+    constexpr int kMaxAttempts = 50;
     bool anyHookEnabled = false;
-
-    if (gdiSwapAddr != nullptr &&
-        MH_CreateHook(gdiSwapAddr, reinterpret_cast<void *>(&UiHookManager::HookedSwapBuffers),
-                      reinterpret_cast<void **>(&originalSwapBuffers_)) == MH_OK &&
-        MH_EnableHook(gdiSwapAddr) == MH_OK) {
-        anyHookEnabled = true;
-        std::cout << "[+] gdi32!SwapBuffers hook installed." << std::endl;
-    } else {
-        std::cout << "[!] WARNING: Failed to hook gdi32!SwapBuffers." << std::endl;
-    }
-
-    if (wglSwapAddr != nullptr &&
-        MH_CreateHook(wglSwapAddr, reinterpret_cast<void *>(&UiHookManager::HookedWglSwapBuffers),
-                      reinterpret_cast<void **>(&originalWglSwapBuffers_)) == MH_OK &&
-        MH_EnableHook(wglSwapAddr) == MH_OK) {
-        anyHookEnabled = true;
-        std::cout << "[+] opengl32!wglSwapBuffers hook installed." << std::endl;
-    } else {
-        std::cout << "[!] WARNING: Failed to hook opengl32!wglSwapBuffers." << std::endl;
+    for (int attempt = 0; attempt < kMaxAttempts && !anyHookEnabled; ++attempt) {
+        anyHookEnabled = TryInstallHooks();
+        if (!anyHookEnabled) {
+            Sleep(100);
+        }
     }
 
     if (anyHookEnabled) {
         std::cout << "[+] MENU: Press INSERT to toggle." << std::endl;
     } else {
         std::cout << "[!] ERROR: No active swap hook; menu cannot be rendered." << std::endl;
+        MH_Uninitialize();
+        minHookInitialized_ = false;
+        instance_ = nullptr;
+    }
+
+    return anyHookEnabled;
+}
+
+bool UiHookManager::TryInstallHooks() {
+    bool anyHookEnabled = false;
+
+    if (!swapHookInstalled_) {
+        if (swapBuffersTarget_ == nullptr) {
+            if (HMODULE gdiModule = GetModuleHandleW(L"gdi32.dll"); gdiModule != nullptr) {
+                swapBuffersTarget_ = reinterpret_cast<void *>(GetProcAddress(gdiModule, "SwapBuffers"));
+            }
+        }
+
+        if (swapBuffersTarget_ != nullptr) {
+            const MH_STATUS createStatus = MH_CreateHook(
+                swapBuffersTarget_,
+                reinterpret_cast<void *>(&UiHookManager::HookedSwapBuffers),
+                reinterpret_cast<void **>(&originalSwapBuffers_));
+            if (createStatus == MH_OK || createStatus == MH_ERROR_ALREADY_CREATED) {
+                const MH_STATUS enableStatus = MH_EnableHook(swapBuffersTarget_);
+                if (enableStatus == MH_OK || enableStatus == MH_ERROR_ENABLED) {
+                    swapHookInstalled_ = true;
+                    anyHookEnabled = true;
+                    std::cout << "[+] gdi32!SwapBuffers hook installed." << std::endl;
+                }
+            }
+        }
+    } else {
+        anyHookEnabled = true;
+    }
+
+    if (!wglHookInstalled_) {
+        if (wglSwapBuffersTarget_ == nullptr) {
+            if (HMODULE openglModule = GetModuleHandleW(L"opengl32.dll"); openglModule != nullptr) {
+                wglSwapBuffersTarget_ = reinterpret_cast<void *>(GetProcAddress(openglModule, "wglSwapBuffers"));
+            }
+        }
+
+        if (wglSwapBuffersTarget_ != nullptr) {
+            const MH_STATUS createStatus = MH_CreateHook(
+                wglSwapBuffersTarget_,
+                reinterpret_cast<void *>(&UiHookManager::HookedWglSwapBuffers),
+                reinterpret_cast<void **>(&originalWglSwapBuffers_));
+            if (createStatus == MH_OK || createStatus == MH_ERROR_ALREADY_CREATED) {
+                const MH_STATUS enableStatus = MH_EnableHook(wglSwapBuffersTarget_);
+                if (enableStatus == MH_OK || enableStatus == MH_ERROR_ENABLED) {
+                    wglHookInstalled_ = true;
+                    anyHookEnabled = true;
+                    std::cout << "[+] opengl32!wglSwapBuffers hook installed." << std::endl;
+                }
+            }
+        }
+    } else {
+        anyHookEnabled = true;
     }
 
     return anyHookEnabled;
 }
 
 void UiHookManager::Shutdown() {
-    if (minHookInitialized_) {
-        MH_DisableHook(MH_ALL_HOOKS);
-        MH_Uninitialize();
-        minHookInitialized_ = false;
-    }
+    shuttingDown_ = true;
+    Sleep(50);
 
     if (wndProcHooked_ && window_ != nullptr && originalWndProc_ != nullptr) {
         SetWindowLongPtr(window_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(originalWndProc_));
@@ -72,7 +113,24 @@ void UiHookManager::Shutdown() {
         menu_.Shutdown();
     }
 
+    if (minHookInitialized_) {
+        if (swapHookInstalled_ && swapBuffersTarget_ != nullptr) {
+            MH_DisableHook(swapBuffersTarget_);
+            MH_RemoveHook(swapBuffersTarget_);
+            swapHookInstalled_ = false;
+        }
+        if (wglHookInstalled_ && wglSwapBuffersTarget_ != nullptr) {
+            MH_DisableHook(wglSwapBuffersTarget_);
+            MH_RemoveHook(wglSwapBuffersTarget_);
+            wglHookInstalled_ = false;
+        }
+        MH_Uninitialize();
+        minHookInitialized_ = false;
+    }
+
     window_ = nullptr;
+    swapBuffersTarget_ = nullptr;
+    wglSwapBuffersTarget_ = nullptr;
     originalWndProc_ = nullptr;
     originalSwapBuffers_ = nullptr;
     originalWglSwapBuffers_ = nullptr;
@@ -110,10 +168,20 @@ BOOL UiHookManager::RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn)
         return FALSE;
     }
 
+    if (shuttingDown_) {
+        return originalFn(hDc);
+    }
+
     if (inSwapHook_) {
         return originalFn(hDc);
     }
     inSwapHook_ = true;
+
+    if (wglGetCurrentContext() == nullptr) {
+        const BOOL result = originalFn(hDc);
+        inSwapHook_ = false;
+        return result;
+    }
 
     if (!menu_.IsInitialized()) {
         const HWND candidateWindow = WindowFromDC(hDc);
@@ -162,7 +230,8 @@ BOOL WINAPI UiHookManager::HookedWglSwapBuffers(HDC hDc) {
 }
 
 LRESULT CALLBACK UiHookManager::HookedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    if (instance_ != nullptr && instance_->menu_.HandleWndProc(hWnd, uMsg, wParam, lParam)) {
+    if (instance_ != nullptr && !instance_->shuttingDown_ &&
+        instance_->menu_.HandleWndProc(hWnd, uMsg, wParam, lParam)) {
         return 0;
     }
 
