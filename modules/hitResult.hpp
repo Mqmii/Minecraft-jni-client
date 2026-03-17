@@ -37,6 +37,7 @@ public:
     jmethodID getEntityMethodID{};
     jmethodID getNameMethodID{};
     jmethodID getStringMethodID{};
+    jmethodID startAttackMethodID{};
     jmethodID mid_isAlive{};
     EntityHitResult(JNIEnv *p_env, Minecraft *p_mc);
     void isEntity() const;

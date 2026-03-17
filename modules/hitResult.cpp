@@ -88,6 +88,10 @@ EntityHitResult::EntityHitResult(JNIEnv *p_env, Minecraft *p_mc) : HitResult(p_e
     if (mid_isAlive == nullptr) {
         std::cout << "[ERROR] isAlive method not found." << std::endl;
     }
+    startAttackMethodID = env->GetMethodID(Minecraft::getMinecraftClass(),"bu","()Z");
+    if (startAttackMethodID == nullptr) {
+        std::cout << "[ERROR] Start Attack Method is missing!" << std::endl;
+    }
     env->DeleteLocalRef(localComponent);
 
 }
@@ -107,7 +111,7 @@ void EntityHitResult::isEntity() const {
 
     if (!env->IsInstanceOf(entity,clsPlayer)) {
         if (isAttackReady() and isalive) {
-            Click::LeftClick();
+            env->CallBooleanMethod(Minecraft::getMcInstance(),startAttackMethodID);
         }
         env->DeleteLocalRef(entity);
         env->DeleteLocalRef(obj_hitresult);
@@ -128,8 +132,9 @@ void EntityHitResult::isEntity() const {
     std::string playerName(nameChars);
     env->ReleaseStringUTFChars(nameJstr,nameChars);
     std::cout << "[DEBUG] Player name: " << playerName << std::endl;
+    //Todo: isFriend check
     if (isAttackReady() and isalive) {
-        Click::LeftClick();
+        env->CallBooleanMethod(Minecraft::getMcInstance(),startAttackMethodID);
     }
     env->DeleteLocalRef(entity);
     env->DeleteLocalRef(componentObj);
