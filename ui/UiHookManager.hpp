@@ -22,7 +22,11 @@ private:
     using WndProcFn = LRESULT(CALLBACK *)(HWND, UINT, WPARAM, LPARAM);
 
     bool TryInstallHooks();
+    bool AttachToWindow(HWND hWnd);
+    void DetachWndProc();
     bool IsValidGameWindow(HWND hWnd) const;
+    HWND ResolveGameWindow(HDC hDc) const;
+    void WaitForCallbacksToDrain() const;
     BOOL RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn);
 
     static BOOL WINAPI HookedSwapBuffers(HDC hDc);
@@ -44,4 +48,6 @@ private:
     bool swapHookInstalled_ = false;
     bool wglHookInstalled_ = false;
     std::atomic_bool shuttingDown_ = false;
+    std::atomic_uint32_t activeSwapCalls_ = 0;
+    std::atomic_uint32_t activeWndProcCalls_ = 0;
 };

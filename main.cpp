@@ -11,22 +11,34 @@
 #include "jni/JniEnvironment.hpp"
 #include "ui/UiHookManager.hpp"
 
-void MainThread(HMODULE hModule) {
+namespace {
+void CleanupConsole(FILE *outputStream, FILE *inputStream) {
+    if (outputStream != nullptr) {
+        fclose(outputStream);
+    }
+    if (inputStream != nullptr) {
+        fclose(inputStream);
+    }
+    FreeConsole();
+}
+} // namespace
+
+DWORD WINAPI MainThread(LPVOID moduleHandle) {
+    HMODULE hModule = static_cast<HMODULE>(moduleHandle);
     AllocConsole();
-    FILE *f;
-    freopen_s(&f, "CONOUT$", "w", stdout);
-    freopen_s(&f, "CONIN$", "r", stdin);
+    FILE *outputStream = nullptr;
+    FILE *inputStream = nullptr;
+    freopen_s(&outputStream, "CONOUT$", "w", stdout);
+    freopen_s(&inputStream, "CONIN$", "r", stdin);
 
     std::cout << "[+] DLL injected." << std::endl;
 
     JniEnvironment jniEnvironment;
     if (!jniEnvironment.Initialize("JNI Cheat")) {
         Sleep(3000);
-        fclose(stdout);
-        fclose(stdin);
-        FreeConsole();
+        CleanupConsole(outputStream, inputStream);
         FreeLibraryAndExitThread(hModule, 0);
-        return;
+        return 0;
     }
 
     std::cout << "[+] SUCCESS: Attached to JVM." << std::endl;
@@ -37,11 +49,9 @@ void MainThread(HMODULE hModule) {
         std::cout << "[!] ERROR: Failed to initialize UI hooks." << std::endl;
         jniEnvironment.Shutdown();
         Sleep(1000);
-        fclose(stdout);
-        fclose(stdin);
-        FreeConsole();
+        CleanupConsole(outputStream, inputStream);
         FreeLibraryAndExitThread(hModule, 0);
-        return;
+        return 0;
     }
 
     JNIEnv *p_env = jniEnvironment.GetEnv();
@@ -54,7 +64,7 @@ void MainThread(HMODULE hModule) {
     FastPlace fast_place(p_env);
     Velocity velocity(p_env);
 
-    while (uiHookManager.State().running && !GetAsyncKeyState(VK_DELETE)) {
+    while (uiHookManager.State().running && (GetAsyncKeyState(VK_DELETE) & 0x8000) == 0) {
         const ImGuiMenuState &menuState = uiHookManager.State();
         if (menuState.fastBreak) fast_break.break_fast();
         if (menuState.fastPlace) fast_place.onUPdate();
@@ -67,16 +77,15 @@ void MainThread(HMODULE hModule) {
     jniEnvironment.Shutdown();
 
     Sleep(1000);
-    fclose(stdout);
-    fclose(stdin);
-    FreeConsole();
+    CleanupConsole(outputStream, inputStream);
     FreeLibraryAndExitThread(hModule, 0);
+    return 0;
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hModule);
-        HANDLE hThread = CreateThread(nullptr, 0, (LPTHREAD_START_ROUTINE) MainThread, hModule, 0, nullptr);
+        HANDLE hThread = CreateThread(nullptr, 0, MainThread, hModule, 0, nullptr);
         if (hThread) CloseHandle(hThread);
     }
     return TRUE;

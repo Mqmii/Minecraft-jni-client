@@ -7,6 +7,22 @@
 UiHookManager *UiHookManager::instance_ = nullptr;
 thread_local bool UiHookManager::inSwapHook_ = false;
 
+namespace {
+class CallbackScope {
+public:
+    explicit CallbackScope(std::atomic_uint32_t &counter) : counter_(counter) {
+        counter_.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    ~CallbackScope() {
+        counter_.fetch_sub(1, std::memory_order_acq_rel);
+    }
+
+private:
+    std::atomic_uint32_t &counter_;
+};
+} // namespace
+
 bool UiHookManager::Initialize() {
     if (instance_ != nullptr && instance_ != this) {
         std::cout << "[!] ERROR: UiHookManager is already active." << std::endl;
@@ -102,16 +118,6 @@ bool UiHookManager::TryInstallHooks() {
 
 void UiHookManager::Shutdown() {
     shuttingDown_ = true;
-    Sleep(50);
-
-    if (wndProcHooked_ && window_ != nullptr && originalWndProc_ != nullptr) {
-        SetWindowLongPtr(window_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(originalWndProc_));
-        wndProcHooked_ = false;
-    }
-
-    if (menu_.IsInitialized()) {
-        menu_.Shutdown();
-    }
 
     if (minHookInitialized_) {
         if (swapHookInstalled_ && swapBuffersTarget_ != nullptr) {
@@ -124,6 +130,16 @@ void UiHookManager::Shutdown() {
             MH_RemoveHook(wglSwapBuffersTarget_);
             wglHookInstalled_ = false;
         }
+    }
+
+    DetachWndProc();
+    WaitForCallbacksToDrain();
+
+    if (menu_.IsInitialized()) {
+        menu_.Shutdown();
+    }
+
+    if (minHookInitialized_) {
         MH_Uninitialize();
         minHookInitialized_ = false;
     }
@@ -148,6 +164,52 @@ const ImGuiMenuState &UiHookManager::State() const {
     return menu_.State();
 }
 
+bool UiHookManager::AttachToWindow(HWND hWnd) {
+    if (!IsValidGameWindow(hWnd)) {
+        return false;
+    }
+
+    if (window_ != hWnd) {
+        if (menu_.IsInitialized()) {
+            menu_.Shutdown();
+        }
+        DetachWndProc();
+        window_ = hWnd;
+    }
+
+    if (wndProcHooked_) {
+        return true;
+    }
+
+    SetLastError(0);
+    auto currentWndProc = reinterpret_cast<WndProcFn>(GetWindowLongPtr(window_, GWLP_WNDPROC));
+    if (currentWndProc == nullptr && GetLastError() != 0) {
+        std::cout << "[!] ERROR: Failed to query WndProc." << std::endl;
+        return false;
+    }
+
+    SetLastError(0);
+    const auto previousWndProc = reinterpret_cast<WndProcFn>(
+        SetWindowLongPtr(window_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&UiHookManager::HookedWndProc)));
+    if (previousWndProc == nullptr && GetLastError() != 0) {
+        std::cout << "[!] ERROR: Failed to hook WndProc." << std::endl;
+        return false;
+    }
+
+    originalWndProc_ = currentWndProc != nullptr ? currentWndProc : previousWndProc;
+    wndProcHooked_ = originalWndProc_ != nullptr;
+    return wndProcHooked_;
+}
+
+void UiHookManager::DetachWndProc() {
+    if (wndProcHooked_ && window_ != nullptr && originalWndProc_ != nullptr) {
+        SetWindowLongPtr(window_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(originalWndProc_));
+    }
+
+    wndProcHooked_ = false;
+    originalWndProc_ = nullptr;
+}
+
 bool UiHookManager::IsValidGameWindow(HWND hWnd) const {
     if (hWnd == nullptr || !IsWindow(hWnd) || !IsWindowVisible(hWnd)) {
         return false;
@@ -163,10 +225,38 @@ bool UiHookManager::IsValidGameWindow(HWND hWnd) const {
     return width > 0 && height > 0;
 }
 
+HWND UiHookManager::ResolveGameWindow(HDC hDc) const {
+    HWND candidateWindow = WindowFromDC(hDc);
+    if (candidateWindow == nullptr) {
+        return nullptr;
+    }
+
+    if (HWND rootWindow = GetAncestor(candidateWindow, GA_ROOT); rootWindow != nullptr) {
+        candidateWindow = rootWindow;
+    }
+
+    return IsValidGameWindow(candidateWindow) ? candidateWindow : nullptr;
+}
+
+void UiHookManager::WaitForCallbacksToDrain() const {
+    constexpr int kMaxWaitIterations = 200;
+    for (int attempt = 0; attempt < kMaxWaitIterations; ++attempt) {
+        if (activeSwapCalls_.load(std::memory_order_acquire) == 0 &&
+            activeWndProcCalls_.load(std::memory_order_acquire) == 0) {
+            return;
+        }
+        Sleep(10);
+    }
+
+    std::cout << "[!] WARNING: Timed out waiting for UI callbacks to drain." << std::endl;
+}
+
 BOOL UiHookManager::RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn) {
     if (originalFn == nullptr) {
         return FALSE;
     }
+
+    CallbackScope callbackScope(activeSwapCalls_);
 
     if (shuttingDown_) {
         return originalFn(hDc);
@@ -176,30 +266,17 @@ BOOL UiHookManager::RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn)
         return originalFn(hDc);
     }
     inSwapHook_ = true;
+    struct SwapHookReset {
+        bool &flag;
+        ~SwapHookReset() { flag = false; }
+    } reset{inSwapHook_};
 
     if (wglGetCurrentContext() == nullptr) {
-        const BOOL result = originalFn(hDc);
-        inSwapHook_ = false;
-        return result;
+        return originalFn(hDc);
     }
 
-    if (!menu_.IsInitialized()) {
-        const HWND candidateWindow = WindowFromDC(hDc);
-        if (IsValidGameWindow(candidateWindow)) {
-            if (!wndProcHooked_) {
-                window_ = candidateWindow;
-                SetLastError(0);
-
-                auto prevWndProc = reinterpret_cast<WndProcFn>(
-                    SetWindowLongPtr(window_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&UiHookManager::HookedWndProc)));
-                if (prevWndProc != nullptr) {
-                    originalWndProc_ = prevWndProc;
-                    wndProcHooked_ = true;
-                } else if (GetLastError() != 0) {
-                    std::cout << "[!] ERROR: Failed to hook WndProc." << std::endl;
-                }
-            }
-
+    if (HWND candidateWindow = ResolveGameWindow(hDc); candidateWindow != nullptr) {
+        if (AttachToWindow(candidateWindow) && !menu_.IsInitialized()) {
             if (!menu_.Initialize(window_)) {
                 std::cout << "[!] ERROR: Failed to initialize ImGui." << std::endl;
             }
@@ -210,9 +287,7 @@ BOOL UiHookManager::RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn)
         menu_.RenderFrame();
     }
 
-    const BOOL result = originalFn(hDc);
-    inSwapHook_ = false;
-    return result;
+    return originalFn(hDc);
 }
 
 BOOL WINAPI UiHookManager::HookedSwapBuffers(HDC hDc) {
@@ -230,14 +305,20 @@ BOOL WINAPI UiHookManager::HookedWglSwapBuffers(HDC hDc) {
 }
 
 LRESULT CALLBACK UiHookManager::HookedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    if (instance_ != nullptr && !instance_->shuttingDown_ &&
-        instance_->menu_.HandleWndProc(hWnd, uMsg, wParam, lParam)) {
-        return 0;
-    }
-
-    if (instance_ == nullptr || instance_->originalWndProc_ == nullptr) {
+    UiHookManager *instance = instance_;
+    if (instance == nullptr) {
         return DefWindowProc(hWnd, uMsg, wParam, lParam);
     }
 
-    return CallWindowProc(instance_->originalWndProc_, hWnd, uMsg, wParam, lParam);
+    CallbackScope callbackScope(instance->activeWndProcCalls_);
+
+    if (!instance->shuttingDown_ && instance->menu_.HandleWndProc(hWnd, uMsg, wParam, lParam)) {
+        return 0;
+    }
+
+    if (instance->originalWndProc_ == nullptr) {
+        return DefWindowProc(hWnd, uMsg, wParam, lParam);
+    }
+
+    return CallWindowProc(instance->originalWndProc_, hWnd, uMsg, wParam, lParam);
 }
