@@ -38,6 +38,7 @@ private:
 
     ImGuiMenu menu_;
     HWND window_ = nullptr;
+    HGLRC renderContext_ = nullptr;
     void *swapBuffersTarget_ = nullptr;
     void *wglSwapBuffersTarget_ = nullptr;
     SwapBuffersFn originalSwapBuffers_ = nullptr;

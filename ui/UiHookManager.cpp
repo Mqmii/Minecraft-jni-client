@@ -136,7 +136,8 @@ void UiHookManager::Shutdown() {
     WaitForCallbacksToDrain();
 
     if (menu_.IsInitialized()) {
-        menu_.Shutdown();
+        const bool canShutdownRenderer = renderContext_ != nullptr && wglGetCurrentContext() == renderContext_;
+        menu_.Shutdown(canShutdownRenderer);
     }
 
     if (minHookInitialized_) {
@@ -145,6 +146,7 @@ void UiHookManager::Shutdown() {
     }
 
     window_ = nullptr;
+    renderContext_ = nullptr;
     swapBuffersTarget_ = nullptr;
     wglSwapBuffersTarget_ = nullptr;
     originalWndProc_ = nullptr;
@@ -173,6 +175,7 @@ bool UiHookManager::AttachToWindow(HWND hWnd) {
         if (menu_.IsInitialized()) {
             menu_.Shutdown();
         }
+        renderContext_ = nullptr;
         DetachWndProc();
         window_ = hWnd;
     }
@@ -271,14 +274,24 @@ BOOL UiHookManager::RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn)
         ~SwapHookReset() { flag = false; }
     } reset{inSwapHook_};
 
-    if (wglGetCurrentContext() == nullptr) {
+    const HGLRC currentContext = wglGetCurrentContext();
+    if (currentContext == nullptr) {
         return originalFn(hDc);
     }
 
     if (HWND candidateWindow = ResolveGameWindow(hDc); candidateWindow != nullptr) {
-        if (AttachToWindow(candidateWindow) && !menu_.IsInitialized()) {
-            if (!menu_.Initialize(window_)) {
-                std::cout << "[!] ERROR: Failed to initialize ImGui." << std::endl;
+        if (AttachToWindow(candidateWindow)) {
+            if (renderContext_ != currentContext) {
+                if (menu_.IsInitialized()) {
+                    menu_.Shutdown();
+                }
+                renderContext_ = currentContext;
+            }
+
+            if (!menu_.IsInitialized()) {
+                if (!menu_.Initialize(window_)) {
+                    std::cout << "[!] ERROR: Failed to initialize ImGui." << std::endl;
+                }
             }
         }
     }

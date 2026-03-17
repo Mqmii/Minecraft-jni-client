@@ -14,7 +14,7 @@ struct ImGuiMenuState {
 class ImGuiMenu {
 public:
     bool Initialize(HWND window);
-    void Shutdown();
+    void Shutdown(bool shutdownRenderer = true);
     void RenderFrame();
     bool HandleWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
@@ -25,6 +25,7 @@ public:
 private:
     void ApplyMenuInputState();
     void UpdateToggleState();
+    void ToggleMenu();
     void DrawMenu();
 
     bool initialized_ = false;

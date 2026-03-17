@@ -27,11 +27,14 @@ bool ImGuiMenu::Initialize(HWND window) {
     }
 
     window_ = window;
+    showMenu_ = false;
+    menuInputEnabled_ = false;
+    insertWasDown_ = false;
     initialized_ = true;
     return true;
 }
 
-void ImGuiMenu::Shutdown() {
+void ImGuiMenu::Shutdown(bool shutdownRenderer) {
     if (!initialized_) {
         return;
     }
@@ -39,21 +42,37 @@ void ImGuiMenu::Shutdown() {
     showMenu_ = false;
     ApplyMenuInputState();
 
-    ImGui_ImplOpenGL3_Shutdown();
+    if (shutdownRenderer) {
+        ImGui_ImplOpenGL3_Shutdown();
+    } else {
+        // We may be unloading from a non-render thread without the original GL context.
+        // Clear renderer backend bookkeeping so DestroyContext() doesn't assert.
+        ImGuiIO &io = ImGui::GetIO();
+        ImGuiPlatformIO &platformIo = ImGui::GetPlatformIO();
+        io.BackendRendererName = nullptr;
+        io.BackendRendererUserData = nullptr;
+        io.BackendFlags &= ~(ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures);
+        platformIo.ClearRendererHandlers();
+    }
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
 
     initialized_ = false;
+    insertWasDown_ = false;
     window_ = nullptr;
 }
 
 void ImGuiMenu::UpdateToggleState() {
     const bool insertDown = (GetAsyncKeyState(VK_INSERT) & 0x8000) != 0;
     if (insertDown && !insertWasDown_) {
-        showMenu_ = !showMenu_;
-        ApplyMenuInputState();
+        ToggleMenu();
     }
     insertWasDown_ = insertDown;
+}
+
+void ImGuiMenu::ToggleMenu() {
+    showMenu_ = !showMenu_;
+    ApplyMenuInputState();
 }
 
 void ImGuiMenu::ApplyMenuInputState() {
@@ -127,7 +146,22 @@ void ImGuiMenu::RenderFrame() {
 }
 
 bool ImGuiMenu::HandleWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    if (!initialized_ || !showMenu_) {
+    if (!initialized_) {
+        return false;
+    }
+
+    if ((uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && wParam == VK_INSERT) {
+        ToggleMenu();
+        insertWasDown_ = true;
+        return true;
+    }
+
+    if ((uMsg == WM_KEYUP || uMsg == WM_SYSKEYUP) && wParam == VK_INSERT) {
+        insertWasDown_ = false;
+        return showMenu_;
+    }
+
+    if (!showMenu_) {
         return false;
     }
 
