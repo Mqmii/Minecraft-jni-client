@@ -4,6 +4,7 @@
 #include "click.hpp"
 #include "../classes/Entity.hpp"
 #include "../jni/MinecraftMappings.hpp"
+
 HitResult::HitResult(JNIEnv *p_env, Minecraft *p_mc) : env(p_env), mc(p_mc), hitResultClass(nullptr),
                                                        hitResultFieldID(nullptr) {
     jclass localClass = env->FindClass(mc_mappings::classes::HitResult);
@@ -88,37 +89,37 @@ EntityHitResult::EntityHitResult(JNIEnv *p_env, Minecraft *p_mc) : HitResult(p_e
     if (mid_isAlive == nullptr) {
         std::cout << "[ERROR] isAlive method not found." << std::endl;
     }
-    startAttackMethodID = env->GetMethodID(Minecraft::getMinecraftClass(),"bu","()Z");
+    startAttackMethodID = env->GetMethodID(Minecraft::getMinecraftClass(), mc_mappings::minecraft::StartAttack.name,
+                                           mc_mappings::minecraft::StartAttack.signature);
     if (startAttackMethodID == nullptr) {
         std::cout << "[ERROR] Start Attack Method is missing!" << std::endl;
     }
     env->DeleteLocalRef(localComponent);
-
 }
 
 void EntityHitResult::isEntity() const {
     jobject obj_hitresult = getHitResultObject();
-    if (!env->IsInstanceOf(obj_hitresult,clsEntityHitResult)) {
+    if (!env->IsInstanceOf(obj_hitresult, clsEntityHitResult)) {
         env->DeleteLocalRef(obj_hitresult);
         return;
     }
-    jobject entity = env->CallObjectMethod(obj_hitresult,getEntityMethodID);
+    jobject entity = env->CallObjectMethod(obj_hitresult, getEntityMethodID);
     if (entity == nullptr) {
         env->DeleteLocalRef(obj_hitresult);
         return;
     }
-    bool isalive = env->CallBooleanMethod(entity,mid_isAlive);
+    bool isalive = env->CallBooleanMethod(entity, mid_isAlive);
 
-    if (!env->IsInstanceOf(entity,clsPlayer)) {
+    if (!env->IsInstanceOf(entity, clsPlayer)) {
         if (isAttackReady() and isalive) {
-            env->CallBooleanMethod(Minecraft::getMcInstance(),startAttackMethodID);
+            env->CallBooleanMethod(Minecraft::getMcInstance(), startAttackMethodID);
         }
         env->DeleteLocalRef(entity);
         env->DeleteLocalRef(obj_hitresult);
         return;
     }
 
-    jobject componentObj = (env->CallObjectMethod(entity,getNameMethodID));
+    jobject componentObj = (env->CallObjectMethod(entity, getNameMethodID));
     if (componentObj == nullptr) {
         std::cout << "[ERROR] Component object not found." << std::endl;
         env->DeleteLocalRef(entity);
@@ -126,21 +127,22 @@ void EntityHitResult::isEntity() const {
         return;
     }
 
-    auto nameJstr = reinterpret_cast<jstring>(env->CallObjectMethod(componentObj,getStringMethodID));
+    auto nameJstr = reinterpret_cast<jstring>(env->CallObjectMethod(componentObj, getStringMethodID));
     if (nameJstr == nullptr) std::cout << "[ERROR] Player name string is null." << std::endl;
-    const char *nameChars = env->GetStringUTFChars(nameJstr,nullptr);
+    const char *nameChars = env->GetStringUTFChars(nameJstr, nullptr);
     std::string playerName(nameChars);
-    env->ReleaseStringUTFChars(nameJstr,nameChars);
+    env->ReleaseStringUTFChars(nameJstr, nameChars);
     std::cout << "[DEBUG] Player name: " << playerName << std::endl;
     //Todo: isFriend check
     if (isAttackReady() and isalive) {
-        env->CallBooleanMethod(Minecraft::getMcInstance(),startAttackMethodID);
+        env->CallBooleanMethod(Minecraft::getMcInstance(), startAttackMethodID);
     }
     env->DeleteLocalRef(entity);
     env->DeleteLocalRef(componentObj);
     env->DeleteLocalRef(obj_hitresult);
     env->DeleteLocalRef(nameJstr);
 }
+
 bool EntityHitResult::isAttackReady() const {
     jmethodID mid_GetStregth = env->GetMethodID(
         LocalPlayer::getLocalPlayerClass(),
@@ -150,7 +152,7 @@ bool EntityHitResult::isAttackReady() const {
         std::cout << "[ERROR] getAttackStrength method not found." << std::endl;
         return false;
     }
-    float strength = env->CallFloatMethod(LocalPlayer::getLocalPlayerObject(),mid_GetStregth,0.0f);
+    float strength = env->CallFloatMethod(LocalPlayer::getLocalPlayerObject(), mid_GetStregth, 0.0f);
     if (strength >= 1.0f) {
         return true;
     }

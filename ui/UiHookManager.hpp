@@ -26,6 +26,8 @@ private:
     void DetachWndProc();
     bool IsValidGameWindow(HWND hWnd) const;
     HWND ResolveGameWindow(HDC hDc) const;
+    bool ObserveStableRenderTarget(HWND hWnd, HGLRC context);
+    void ResetObservedRenderTarget();
     void WaitForCallbacksToDrain() const;
     BOOL RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn);
 
@@ -39,6 +41,9 @@ private:
     ImGuiMenu menu_;
     HWND window_ = nullptr;
     HGLRC renderContext_ = nullptr;
+    HWND observedWindow_ = nullptr;
+    HGLRC observedRenderContext_ = nullptr;
+    unsigned int observedRenderTargetHits_ = 0;
     void *swapBuffersTarget_ = nullptr;
     void *wglSwapBuffersTarget_ = nullptr;
     SwapBuffersFn originalSwapBuffers_ = nullptr;
