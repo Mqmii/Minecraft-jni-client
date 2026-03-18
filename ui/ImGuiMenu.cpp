@@ -1,10 +1,86 @@
-﻿#include "ImGuiMenu.hpp"
+#include "ImGuiMenu.hpp"
+
+#include <cfloat>
+#include <sstream>
+#include <string>
 
 #include "imgui.h"
-#include "imgui_impl_win32.h"
 #include "imgui_impl_opengl3.h"
+#include "imgui_impl_win32.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+namespace {
+std::string VirtualKeyToString(int virtualKey) {
+    switch (virtualKey) {
+        case 0: return "None";
+        case VK_INSERT: return "INSERT";
+        case VK_DELETE: return "DELETE";
+        case VK_HOME: return "HOME";
+        case VK_END: return "END";
+        case VK_PRIOR: return "PAGE_UP";
+        case VK_NEXT: return "PAGE_DOWN";
+        case VK_LEFT: return "LEFT";
+        case VK_RIGHT: return "RIGHT";
+        case VK_UP: return "UP";
+        case VK_DOWN: return "DOWN";
+        case VK_SPACE: return "SPACE";
+        case VK_TAB: return "TAB";
+        case VK_RETURN: return "ENTER";
+        case VK_ESCAPE: return "ESC";
+        case VK_BACK: return "BACKSPACE";
+        case VK_CAPITAL: return "CAPS_LOCK";
+        case VK_LSHIFT: return "LEFT_SHIFT";
+        case VK_RSHIFT: return "RIGHT_SHIFT";
+        case VK_LCONTROL: return "LEFT_CTRL";
+        case VK_RCONTROL: return "RIGHT_CTRL";
+        case VK_LMENU: return "LEFT_ALT";
+        case VK_RMENU: return "RIGHT_ALT";
+        default:
+            break;
+    }
+
+    if ((virtualKey >= '0' && virtualKey <= '9') || (virtualKey >= 'A' && virtualKey <= 'Z')) {
+        return std::string(1, static_cast<char>(virtualKey));
+    }
+
+    if (virtualKey >= VK_F1 && virtualKey <= VK_F24) {
+        return "F" + std::to_string(virtualKey - VK_F1 + 1);
+    }
+
+    UINT scanCode = MapVirtualKeyA(static_cast<UINT>(virtualKey), MAPVK_VK_TO_VSC);
+    LONG lParam = static_cast<LONG>(scanCode) << 16;
+    switch (virtualKey) {
+        case VK_RMENU:
+        case VK_RCONTROL:
+        case VK_INSERT:
+        case VK_DELETE:
+        case VK_HOME:
+        case VK_END:
+        case VK_PRIOR:
+        case VK_NEXT:
+        case VK_LEFT:
+        case VK_RIGHT:
+        case VK_UP:
+        case VK_DOWN:
+        case VK_NUMLOCK:
+        case VK_DIVIDE:
+            lParam |= 1 << 24;
+            break;
+        default:
+            break;
+    }
+
+    char keyName[64]{};
+    if (GetKeyNameTextA(lParam, keyName, sizeof(keyName)) > 0) {
+        return keyName;
+    }
+
+    std::ostringstream stream;
+    stream << "VK_" << std::hex << std::uppercase << virtualKey;
+    return stream.str();
+}
+} // namespace
 
 bool ImGuiMenu::Initialize(HWND window) {
     if (initialized_) {
@@ -30,6 +106,9 @@ bool ImGuiMenu::Initialize(HWND window) {
     showMenu_ = false;
     menuInputEnabled_ = false;
     insertWasDown_ = false;
+    triggerBotHotkeyWasDown_ = false;
+    waitingForTriggerBotHotkey_ = false;
+    triggerBotHotkey_ = VK_LMENU;
     initialized_ = true;
     return true;
 }
@@ -59,6 +138,8 @@ void ImGuiMenu::Shutdown(bool shutdownRenderer) {
 
     initialized_ = false;
     insertWasDown_ = false;
+    triggerBotHotkeyWasDown_ = false;
+    waitingForTriggerBotHotkey_ = false;
     window_ = nullptr;
 }
 
@@ -68,6 +149,21 @@ void ImGuiMenu::UpdateToggleState() {
         ToggleMenu();
     }
     insertWasDown_ = insertDown;
+
+    UpdateTriggerBotHotkeyState();
+}
+
+void ImGuiMenu::UpdateTriggerBotHotkeyState() {
+    if (waitingForTriggerBotHotkey_ || triggerBotHotkey_ == 0) {
+        triggerBotHotkeyWasDown_ = false;
+        return;
+    }
+
+    const bool hotkeyDown = (GetAsyncKeyState(triggerBotHotkey_) & 0x8000) != 0;
+    if (hotkeyDown && !triggerBotHotkeyWasDown_) {
+        state_.triggerBot = !state_.triggerBot;
+    }
+    triggerBotHotkeyWasDown_ = hotkeyDown;
 }
 
 void ImGuiMenu::ToggleMenu() {
@@ -112,6 +208,8 @@ void ImGuiMenu::ApplyMenuInputState() {
 }
 
 void ImGuiMenu::DrawMenu() {
+    ImGui::SetNextWindowSize(ImVec2(300.0f, 0.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(300.0f, 0.0f), ImVec2(FLT_MAX, FLT_MAX));
     ImGui::Begin("JNI Cheat");
 
     ImGui::Text("Menu");
@@ -122,8 +220,27 @@ void ImGuiMenu::DrawMenu() {
     ImGui::Checkbox("Auto Sprint", &state_.sprint);
     ImGui::Checkbox("Anti knockback", &state_.velocity);
     ImGui::Checkbox("TriggerBot", &state_.triggerBot);
+    ImGui::SameLine();
+    DrawTriggerBotHotkeyControl();
 
     ImGui::End();
+}
+
+void ImGuiMenu::DrawTriggerBotHotkeyControl() {
+    ImGui::TextDisabled("Hotkey:");
+    ImGui::SameLine();
+
+    const std::string buttonLabel = waitingForTriggerBotHotkey_
+                                        ? "Press key..."
+                                        : VirtualKeyToString(triggerBotHotkey_);
+    if (ImGui::Button(buttonLabel.c_str(), ImVec2(120.0f, 0.0f))) {
+        waitingForTriggerBotHotkey_ = true;
+        triggerBotHotkeyWasDown_ = false;
+    }
+
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Click and press a key to bind TriggerBot. Press ESC to clear.");
+    }
 }
 
 void ImGuiMenu::RenderFrame() {
@@ -148,6 +265,10 @@ void ImGuiMenu::RenderFrame() {
 bool ImGuiMenu::HandleWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     if (!initialized_) {
         return false;
+    }
+
+    if (TryBindTriggerBotHotkey(uMsg, wParam)) {
+        return true;
     }
 
     if ((uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && wParam == VK_INSERT) {
@@ -198,6 +319,28 @@ bool ImGuiMenu::HandleWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         default:
             return false;
     }
+}
+
+bool ImGuiMenu::TryBindTriggerBotHotkey(UINT uMsg, WPARAM wParam) {
+    if (!waitingForTriggerBotHotkey_) {
+        return false;
+    }
+
+    if (uMsg != WM_KEYDOWN && uMsg != WM_SYSKEYDOWN) {
+        return false;
+    }
+
+    if (wParam == VK_ESCAPE) {
+        triggerBotHotkey_ = 0;
+        waitingForTriggerBotHotkey_ = false;
+        triggerBotHotkeyWasDown_ = false;
+        return true;
+    }
+
+    triggerBotHotkey_ = static_cast<int>(wParam);
+    waitingForTriggerBotHotkey_ = false;
+    triggerBotHotkeyWasDown_ = true;
+    return true;
 }
 
 bool ImGuiMenu::IsInitialized() const {

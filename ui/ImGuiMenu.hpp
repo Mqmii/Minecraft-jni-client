@@ -25,14 +25,20 @@ public:
 private:
     void ApplyMenuInputState();
     void UpdateToggleState();
+    void UpdateTriggerBotHotkeyState();
     void ToggleMenu();
     void DrawMenu();
+    void DrawTriggerBotHotkeyControl();
+    bool TryBindTriggerBotHotkey(UINT uMsg, WPARAM wParam);
 
     bool initialized_ = false;
     bool showMenu_ = false;
     bool menuInputEnabled_ = false;
     bool insertWasDown_ = false;
+    bool triggerBotHotkeyWasDown_ = false;
+    bool waitingForTriggerBotHotkey_ = false;
     int cursorVisibilityAdjustments_ = 0;
+    int triggerBotHotkey_ = VK_LMENU;
     HWND window_ = nullptr;
     ImGuiMenuState state_;
 };
