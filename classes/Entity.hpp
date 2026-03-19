@@ -1,30 +1,30 @@
-﻿
-#ifndef MINECRAFTWRAPPERJNI_ENTITY_HPP
-#define MINECRAFTWRAPPERJNI_ENTITY_HPP
+﻿#pragma once
 #include <jni.h>
+
 class Minecraft;
 
 class Entity {
 public:
-    jclass clsEntity{};
+    inline static jclass clsEntity{};
     jobject EntityObject{};
-    JNIEnv* env;
-    Minecraft *mc;
-    Entity(JNIEnv* p_env,Minecraft *pmc);
+    JNIEnv *env{};
+    Minecraft *mc{};
+
+    explicit Entity(Minecraft *pmc);
 };
 
-class LocalPlayer{
+class LocalPlayer {
 private:
     inline static jclass playerClass;
-    inline static jobject playerObject;
-    JNIEnv* env;
-    Minecraft *mc;
-    jmethodID SetSprinting;
+    inline static jfieldID playerFieldID;
+    JNIEnv *env{};
+    Minecraft *mc{};
+    jmethodID SetSprinting{};
+
 public:
-    LocalPlayer(JNIEnv* p_env,Minecraft *pmc);
+    explicit LocalPlayer(Minecraft *pmc);
     void Sprint();
     static jobject getLocalPlayerObject();
 
     static jclass getLocalPlayerClass();
 };
-#endif

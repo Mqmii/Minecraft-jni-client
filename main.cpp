@@ -10,7 +10,7 @@
 #include "modules/Velocity.hpp"
 #include "jni/JniEnvironment.hpp"
 #include "ui/UiHookManager.hpp"
-
+#include "modules/Esp.hpp"
 namespace {
 void CleanupConsole(FILE *outputStream, FILE *inputStream) {
     if (outputStream != nullptr) {
@@ -54,23 +54,26 @@ DWORD WINAPI MainThread(LPVOID moduleHandle) {
         return 0;
     }
 
-    JNIEnv *p_env = jniEnvironment.GetEnv();
-    Minecraft mc(p_env);
+    Minecraft mc;
     mc.fullBright();
 
-    FastBreak fast_break(p_env, &mc);
-    LocalPlayer player(p_env, &mc);
-    EntityHitResult entity_hit_result(p_env, &mc);
-    FastPlace fast_place(p_env);
-    Velocity velocity(p_env);
+    FastBreak fast_break(&mc);
+    LocalPlayer player(&mc);
+    EntityHitResult entity_hit_result(&mc);
+    FastPlace fast_place;
+    Velocity velocity;
+    Entity entity(&mc);
+    Esp esp;
+    uiHookManager.SetEsp(&esp);
 
     while (uiHookManager.State().running && (GetAsyncKeyState(VK_DELETE) & 0x8000) == 0) {
         const ImGuiMenuState &menuState = uiHookManager.State();
         if (menuState.fastBreak) fast_break.break_fast();
-        if (menuState.fastPlace) fast_place.onUPdate();
+        if (menuState.fastPlace) fast_place.onUpdate();
         if (menuState.sprint) player.Sprint();
         if (menuState.velocity) velocity.anti_knockback();
         if (menuState.triggerBot) entity_hit_result.isEntity();
+        if (menuState.tracer && esp.IsInitialized()) esp.Tick();
         Sleep(20);
     }
     uiHookManager.Shutdown();

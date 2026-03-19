@@ -1,14 +1,13 @@
-﻿
-#ifndef MINECRAFTWRAPPERJNI_FASTPLACE_HPP
-#define MINECRAFTWRAPPERJNI_FASTPLACE_HPP
+#pragma once
+
 #include <jni.h>
 
 class FastPlace {
-    JNIEnv* env;
+    JNIEnv *env{};
     jfieldID clickDelayfield{};
-public:
-    FastPlace(JNIEnv* p_env);
-    void onUPdate();
-};
 
-#endif
+public:
+    FastPlace();
+
+    void onUpdate();
+};

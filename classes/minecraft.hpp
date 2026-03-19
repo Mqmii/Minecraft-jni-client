@@ -7,10 +7,11 @@ class Minecraft {
     inline static jobject mcInstance;
 
 public:
-    explicit Minecraft(JNIEnv *p_env);
+    Minecraft();
 
     [[nodiscard]] static jobject getMcInstance();
 
     [[nodiscard]] static jclass getMinecraftClass();
+    [[nodiscard]] JNIEnv *GetEnv() const;
     void fullBright() const;
 };

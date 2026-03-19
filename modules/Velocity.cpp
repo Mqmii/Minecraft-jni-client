@@ -1,12 +1,12 @@
-﻿
 #include "Velocity.hpp"
 
 #include <iostream>
-#include <jni.h>
+
 #include "../classes/Entity.hpp"
+#include "../jni/JniEnvironment.hpp"
 #include "../jni/MinecraftMappings.hpp"
 
-Velocity::Velocity(JNIEnv *p_env) : env(p_env) {
+Velocity::Velocity() : env(JniEnvironment::GetCurrentEnv()) {
     setDeltaMovementID = env->GetMethodID(
         LocalPlayer::getLocalPlayerClass(),
         mc_mappings::local_player::SetDeltaMovement.name,
@@ -24,8 +24,14 @@ Velocity::Velocity(JNIEnv *p_env) : env(p_env) {
 }
 
 void Velocity::anti_knockback() const {
-    jint ishurt = env->GetIntField(LocalPlayer::getLocalPlayerObject(),hurtTimeFieldID);
-    if (ishurt >= 8) {
-        env->CallVoidMethod(LocalPlayer::getLocalPlayerObject(), setDeltaMovementID, 0.0, 0.0, 0.0);
+    jobject localPlayer = LocalPlayer::getLocalPlayerObject();
+    if (localPlayer == nullptr) {
+        return;
     }
+
+    jint ishurt = env->GetIntField(localPlayer, hurtTimeFieldID);
+    if (ishurt >= 8) {
+        env->CallVoidMethod(localPlayer, setDeltaMovementID, 0.0, 0.0, 0.0);
+    }
+    env->DeleteLocalRef(localPlayer);
 }

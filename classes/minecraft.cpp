@@ -1,9 +1,11 @@
-﻿#include "minecraft.hpp"
+#include "minecraft.hpp"
 
 #include <iostream>
 
+#include "../jni/JniEnvironment.hpp"
 #include "../jni/MinecraftMappings.hpp"
-Minecraft::Minecraft(JNIEnv *p_env): env(p_env) {
+
+Minecraft::Minecraft() : env(JniEnvironment::GetCurrentEnv()) {
     jclass localClass = env->FindClass(mc_mappings::classes::Minecraft);
     minecraftClass = (jclass) env->NewGlobalRef(localClass);
     env->DeleteLocalRef(localClass);
@@ -24,6 +26,10 @@ jobject Minecraft::getMcInstance() {
 
 jclass Minecraft::getMinecraftClass() {
     return minecraftClass;
+}
+
+JNIEnv *Minecraft::GetEnv() const {
+    return env;
 }
 
 void Minecraft::fullBright() const {

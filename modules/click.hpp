@@ -1,10 +1,5 @@
-﻿
-#ifndef MINECRAFTWRAPPERJNI_CLICK_HPP
-#define MINECRAFTWRAPPERJNI_CLICK_HPP
-
+﻿#pragma once
 class Click {
 public:
     static void LeftClick();
 };
-
-#endif

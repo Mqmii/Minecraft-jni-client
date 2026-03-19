@@ -4,6 +4,7 @@
 #include <sstream>
 #include <string>
 
+#include "../modules/Esp.hpp"
 #include "imgui.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_win32.h"
@@ -222,6 +223,7 @@ void ImGuiMenu::DrawMenu() {
     ImGui::Checkbox("TriggerBot", &state_.triggerBot);
     ImGui::SameLine();
     DrawTriggerBotHotkeyControl();
+    ImGui::Checkbox("Tracer", &state_.tracer);
 
     ImGui::End();
 }
@@ -253,6 +255,10 @@ void ImGuiMenu::RenderFrame() {
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
+
+    if (esp_ != nullptr && state_.tracer) {
+        esp_->RenderOverlay();
+    }
 
     if (showMenu_) {
         DrawMenu();
@@ -341,6 +347,10 @@ bool ImGuiMenu::TryBindTriggerBotHotkey(UINT uMsg, WPARAM wParam) {
     waitingForTriggerBotHotkey_ = false;
     triggerBotHotkeyWasDown_ = true;
     return true;
+}
+
+void ImGuiMenu::SetEsp(Esp *esp) {
+    esp_ = esp;
 }
 
 bool ImGuiMenu::IsInitialized() const {

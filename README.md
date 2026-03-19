@@ -8,6 +8,7 @@ Works on 1.21.11 and 1.21.11 Fabric fabric-loader-0.18.4-1.21.11
 - Auto Sprint
 - Anti Knockback
 - TriggerBot
+- Tracer
 
 ## Controls
 

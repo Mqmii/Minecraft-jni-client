@@ -1,16 +1,18 @@
-﻿#include "Entity.hpp"
+#include "Entity.hpp"
 
 #include <iostream>
-
+#include <windows.h>
 #include "minecraft.hpp"
+#include "../jni/JniEnvironment.hpp"
 #include "../jni/MinecraftMappings.hpp"
 
-Entity::Entity(JNIEnv *p_env, Minecraft *pmc) : env(p_env), mc(pmc) {
+Entity::Entity(Minecraft *pmc) : env(JniEnvironment::GetCurrentEnv()), mc(pmc) {
     jclass localclass = env->FindClass(mc_mappings::classes::Entity);
     (void) localclass;
+    clsEntity = reinterpret_cast<jclass>(env->NewGlobalRef(localclass));
 }
 
-LocalPlayer::LocalPlayer(JNIEnv *p_env, Minecraft *pmc) : env(p_env), mc(pmc) {
+LocalPlayer::LocalPlayer(Minecraft *pmc) : env(JniEnvironment::GetCurrentEnv()), mc(pmc) {
     jclass localclass = env->FindClass(mc_mappings::classes::LocalPlayer);
     if (localclass == nullptr) {
         std::cout << "[ERROR] LocalPlayer class not found." << std::endl;
@@ -24,12 +26,7 @@ LocalPlayer::LocalPlayer(JNIEnv *p_env, Minecraft *pmc) : env(p_env), mc(pmc) {
     if (player_fid == nullptr) {
         std::cout << "[ERROR] LocalPlayer field ID not found." << std::endl;
     }
-    jobject localInstance = env->GetObjectField(mc->getMcInstance(), player_fid);
-    if (localInstance == nullptr) {
-        std::cout << "[ERROR] LocalPlayer object not found." << std::endl;
-    }
-    playerObject = env->NewGlobalRef(localInstance);
-    env->DeleteLocalRef(localInstance);
+    playerFieldID = player_fid;
     SetSprinting = env->GetMethodID(
         playerClass,
         mc_mappings::local_player::SetSprinting.name,
@@ -40,12 +37,26 @@ LocalPlayer::LocalPlayer(JNIEnv *p_env, Minecraft *pmc) : env(p_env), mc(pmc) {
 }
 
 void LocalPlayer::Sprint() {
-    env->CallVoidMethod(playerObject, SetSprinting, JNI_TRUE);
+    jobject playerObject = getLocalPlayerObject();
+    if (playerObject == nullptr) {
+        return;
+    }
+
+    if ((GetAsyncKeyState('W') & 0x8000) != 0) {
+        env->CallVoidMethod(playerObject, SetSprinting, JNI_TRUE);
+    }
+    env->DeleteLocalRef(playerObject);
 }
 
 jobject LocalPlayer::getLocalPlayerObject() {
-    return playerObject;
+    JNIEnv *currentEnv = JniEnvironment::GetCurrentEnv();
+    if (currentEnv == nullptr || playerFieldID == nullptr || Minecraft::getMcInstance() == nullptr) {
+        return nullptr;
+    }
+
+    return currentEnv->GetObjectField(Minecraft::getMcInstance(), playerFieldID);
 }
+
 jclass LocalPlayer::getLocalPlayerClass() {
     return playerClass;
 }

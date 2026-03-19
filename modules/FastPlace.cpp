@@ -1,10 +1,12 @@
-﻿
 #include "FastPlace.hpp"
-#include "../classes/minecraft.hpp"
-#include "../jni/MinecraftMappings.hpp"
+
 #include <iostream>
 
-FastPlace::FastPlace(JNIEnv *p_env) : env(p_env) {
+#include "../classes/minecraft.hpp"
+#include "../jni/JniEnvironment.hpp"
+#include "../jni/MinecraftMappings.hpp"
+
+FastPlace::FastPlace() : env(JniEnvironment::GetCurrentEnv()) {
     clickDelayfield = env->GetFieldID(
         Minecraft::getMinecraftClass(),
         mc_mappings::minecraft::RightClickDelay.name,
@@ -14,6 +16,6 @@ FastPlace::FastPlace(JNIEnv *p_env) : env(p_env) {
     }
 }
 
-void FastPlace::onUPdate() {
+void FastPlace::onUpdate() {
     env->SetIntField(Minecraft::getMcInstance(), clickDelayfield, 0);
 }

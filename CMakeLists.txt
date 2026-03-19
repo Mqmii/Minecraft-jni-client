@@ -25,6 +25,8 @@ set(IMGUI_SOURCES
         imgui/imgui_widgets.cpp
         imgui/backends/imgui_impl_win32.cpp
         imgui/backends/imgui_impl_opengl3.cpp
+        modules/Esp.cpp
+        modules/Esp.hpp
 )
 
 add_library(MinecraftWrapperJNI SHARED

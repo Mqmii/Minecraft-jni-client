@@ -1,15 +1,13 @@
-﻿
-#ifndef MINECRAFTWRAPPERJNI_VELOCITY_HPP
-#define MINECRAFTWRAPPERJNI_VELOCITY_HPP
+#pragma once
+
 #include <jni.h>
 
 class Velocity {
     jmethodID setDeltaMovementID{};
     jfieldID hurtTimeFieldID{};
-    JNIEnv *env;
+    JNIEnv *env{};
+
 public:
-    Velocity(JNIEnv *p_env);
+    Velocity();
     void anti_knockback() const;
 };
-
-#endif

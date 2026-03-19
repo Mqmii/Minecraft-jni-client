@@ -1,8 +1,10 @@
-﻿#include "FastBreak.hpp"
+#include "FastBreak.hpp"
 
 #include "../classes/minecraft.hpp"
+#include "../jni/JniEnvironment.hpp"
 #include "../jni/MinecraftMappings.hpp"
-FastBreak::FastBreak(JNIEnv *p_env, Minecraft *p_mc) : env(p_env), mc(p_mc) {
+
+FastBreak::FastBreak(Minecraft *p_mc) : env(JniEnvironment::GetCurrentEnv()), mc(p_mc) {
     jclass clsMinecraft = mc->getMinecraftClass();
 
     jfieldID fid_gamemode = env->GetFieldID(

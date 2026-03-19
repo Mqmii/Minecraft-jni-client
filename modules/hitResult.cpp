@@ -1,12 +1,15 @@
-﻿#include "hitResult.hpp"
-#include <iostream>
-#include "../classes/minecraft.hpp"
-#include "click.hpp"
-#include "../classes/Entity.hpp"
-#include "../jni/MinecraftMappings.hpp"
+#include "hitResult.hpp"
 
-HitResult::HitResult(JNIEnv *p_env, Minecraft *p_mc) : env(p_env), mc(p_mc), hitResultClass(nullptr),
-                                                       hitResultFieldID(nullptr) {
+#include <iostream>
+
+#include "../classes/Entity.hpp"
+#include "../classes/minecraft.hpp"
+#include "../jni/JniEnvironment.hpp"
+#include "../jni/MinecraftMappings.hpp"
+#include "click.hpp"
+
+HitResult::HitResult(Minecraft *p_mc)
+    : env(JniEnvironment::GetCurrentEnv()), mc(p_mc), hitResultClass(nullptr), hitResultFieldID(nullptr) {
     jclass localClass = env->FindClass(mc_mappings::classes::HitResult);
     hitResultClass = reinterpret_cast<jclass>(env->NewGlobalRef(localClass));
     env->DeleteLocalRef(localClass);
@@ -25,7 +28,7 @@ jobject HitResult::getHitResultObject() const {
     return localinstance;
 }
 
-BlockHitResult::BlockHitResult(JNIEnv *p_env, Minecraft *p_mc) : HitResult(p_env, p_mc) {
+BlockHitResult::BlockHitResult(Minecraft *p_mc) : HitResult(p_mc) {
     jclass localclass = env->FindClass(mc_mappings::classes::BlockHitResult);
     clsBlockHitresult = reinterpret_cast<jclass>(env->NewGlobalRef(localclass));
     env->DeleteLocalRef(localclass);
@@ -44,7 +47,7 @@ void BlockHitResult::isBlock() const {
     env->DeleteLocalRef(hitresultobj);
 }
 
-EntityHitResult::EntityHitResult(JNIEnv *p_env, Minecraft *p_mc) : HitResult(p_env, p_mc) {
+EntityHitResult::EntityHitResult(Minecraft *p_mc) : HitResult(p_mc) {
     jclass localclass = env->FindClass(mc_mappings::classes::EntityHitResult);
     if (localclass == nullptr) {
         std::cout << "[ERROR] EntityHitResult class not found." << std::endl;
@@ -55,7 +58,7 @@ EntityHitResult::EntityHitResult(JNIEnv *p_env, Minecraft *p_mc) : HitResult(p_e
         clsEntityHitResult,
         mc_mappings::entity_hit_result::GetEntity.name,
         mc_mappings::entity_hit_result::GetEntity.signature);
-    if (getEntityMethodID == nullptr)std::cout << "[ERROR] getEntity method ID not found." << std::endl;
+    if (getEntityMethodID == nullptr) std::cout << "[ERROR] getEntity method ID not found." << std::endl;
 
     jclass localPlayer = env->FindClass(mc_mappings::classes::Player);
     if (localPlayer == nullptr) std::cout << "[ERROR] Player class not found." << std::endl;
@@ -89,8 +92,10 @@ EntityHitResult::EntityHitResult(JNIEnv *p_env, Minecraft *p_mc) : HitResult(p_e
     if (mid_isAlive == nullptr) {
         std::cout << "[ERROR] isAlive method not found." << std::endl;
     }
-    startAttackMethodID = env->GetMethodID(Minecraft::getMinecraftClass(), mc_mappings::minecraft::StartAttack.name,
-                                           mc_mappings::minecraft::StartAttack.signature);
+    startAttackMethodID = env->GetMethodID(
+        Minecraft::getMinecraftClass(),
+        mc_mappings::minecraft::StartAttack.name,
+        mc_mappings::minecraft::StartAttack.signature);
     if (startAttackMethodID == nullptr) {
         std::cout << "[ERROR] Start Attack Method is missing!" << std::endl;
     }
@@ -119,7 +124,7 @@ void EntityHitResult::isEntity() const {
         return;
     }
 
-    jobject componentObj = (env->CallObjectMethod(entity, getNameMethodID));
+    jobject componentObj = env->CallObjectMethod(entity, getNameMethodID);
     if (componentObj == nullptr) {
         std::cout << "[ERROR] Component object not found." << std::endl;
         env->DeleteLocalRef(entity);
@@ -152,9 +157,12 @@ bool EntityHitResult::isAttackReady() const {
         std::cout << "[ERROR] getAttackStrength method not found." << std::endl;
         return false;
     }
-    float strength = env->CallFloatMethod(LocalPlayer::getLocalPlayerObject(), mid_GetStregth, 0.0f);
-    if (strength >= 1.0f) {
-        return true;
+    jobject localPlayer = LocalPlayer::getLocalPlayerObject();
+    if (localPlayer == nullptr) {
+        return false;
     }
-    return false;
+
+    float strength = env->CallFloatMethod(localPlayer, mid_GetStregth, 0.0f);
+    env->DeleteLocalRef(localPlayer);
+    return strength >= 1.0f;
 }

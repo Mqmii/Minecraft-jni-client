@@ -159,6 +159,10 @@ void UiHookManager::Shutdown() {
     }
 }
 
+void UiHookManager::SetEsp(Esp *esp) {
+    menu_.SetEsp(esp);
+}
+
 ImGuiMenuState &UiHookManager::State() {
     return menu_.State();
 }

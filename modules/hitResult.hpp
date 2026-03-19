@@ -1,17 +1,18 @@
-﻿#pragma once
+#pragma once
 
 #include <jni.h>
+
 class Minecraft;
 
 class HitResult {
 protected:
-    JNIEnv *env;
-    Minecraft *mc;
-    jclass hitResultClass;
-    jfieldID hitResultFieldID;
+    JNIEnv *env{};
+    Minecraft *mc{};
+    jclass hitResultClass{};
+    jfieldID hitResultFieldID{};
 
 public:
-    HitResult(JNIEnv *p_env, Minecraft *p_mc);
+    explicit HitResult(Minecraft *p_mc);
 
     [[nodiscard]] jobject getHitResultObject() const;
 };
@@ -21,7 +22,7 @@ public:
     jclass clsBlockHitresult{};
     jobject obj_Blockhitresult{};
 
-    BlockHitResult(JNIEnv *p_env, Minecraft *p_mc);
+    explicit BlockHitResult(Minecraft *p_mc);
 
     void isBlock() const;
 };
@@ -39,7 +40,8 @@ public:
     jmethodID getStringMethodID{};
     jmethodID startAttackMethodID{};
     jmethodID mid_isAlive{};
-    EntityHitResult(JNIEnv *p_env, Minecraft *p_mc);
+
+    explicit EntityHitResult(Minecraft *p_mc);
     void isEntity() const;
     bool isAttackReady() const;
 };

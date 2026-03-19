@@ -42,6 +42,7 @@ bool JniEnvironment::Initialize(const char *threadName) {
     }
 
     attached_ = true;
+    activeVm_ = vm_;
     return true;
 }
 
@@ -50,9 +51,27 @@ void JniEnvironment::Shutdown() {
         vm_->DetachCurrentThread();
     }
 
+    if (activeVm_ == vm_) {
+        activeVm_ = nullptr;
+    }
+
     attached_ = false;
     env_ = nullptr;
     vm_ = nullptr;
+}
+
+JNIEnv *JniEnvironment::GetCurrentEnv() {
+    if (activeVm_ == nullptr) {
+        return nullptr;
+    }
+
+    JNIEnv *env = nullptr;
+    const jint status = activeVm_->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_8);
+    return status == JNI_OK ? env : nullptr;
+}
+
+JavaVM *JniEnvironment::GetCurrentVm() {
+    return activeVm_;
 }
 
 JNIEnv *JniEnvironment::GetEnv() const {

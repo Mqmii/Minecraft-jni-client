@@ -1,9 +1,11 @@
-﻿#pragma once
+#pragma once
 
 #include <atomic>
 #include <windows.h>
 
 #include "ImGuiMenu.hpp"
+
+class Esp;
 
 class UiHookManager {
 public:
@@ -13,6 +15,7 @@ public:
 
     bool Initialize();
     void Shutdown();
+    void SetEsp(Esp *esp);
 
     ImGuiMenuState &State();
     const ImGuiMenuState &State() const;
