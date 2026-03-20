@@ -22,7 +22,7 @@ Velocity::Velocity() : env(JniEnvironment::GetCurrentEnv()) {
         std::cout << "[ERROR] hurtTime field ID not found." << std::endl;
     }
 }
-
+//todo: improve it with manipulating packets
 void Velocity::anti_knockback() const {
     jobject localPlayer = LocalPlayer::getLocalPlayerObject();
     if (localPlayer == nullptr) {

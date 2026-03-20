@@ -76,6 +76,10 @@ namespace mc_mappings {
         inline constexpr MemberId DestroyProgress{"f", "F"};
     } // namespace game_mode
 
+    namespace player {
+        inline constexpr MemberId GetHealth{"eZ", "()F"};
+    } // namespace player
+
     namespace entity_hit_result {
         inline constexpr MemberId GetEntity{"a", "()Lcgk;"};
     } // namespace entity_hit_result

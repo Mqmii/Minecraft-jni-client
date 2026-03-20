@@ -75,39 +75,6 @@ Vec3 operator-(const Vec3 &lhs, const Vec3 &rhs) {
     return {lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z};
 }
 
-double Dot(const Vec3 &lhs, const Vec3 &rhs) {
-    return lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z;
-}
-
-Vec3 Cross(const Vec3 &lhs, const Vec3 &rhs) {
-    return {
-        lhs.y * rhs.z - lhs.z * rhs.y,
-        lhs.z * rhs.x - lhs.x * rhs.z,
-        lhs.x * rhs.y - lhs.y * rhs.x,
-    };
-}
-
-Vec3 Normalize(const Vec3 &value) {
-    const double length = std::sqrt(Dot(value, value));
-    if (length <= 0.000001) {
-        return {};
-    }
-
-    return {value.x / length, value.y / length, value.z / length};
-}
-
-Vec3 DirectionFromRotation(double pitchDegrees, double yawDegrees) {
-    const double pitchRadians = pitchDegrees * kPi / 180.0;
-    const double yawRadians = -yawDegrees * kPi / 180.0;
-    const double cosPitch = std::cos(pitchRadians);
-
-    return Normalize({
-        std::sin(yawRadians) * cosPitch,
-        -std::sin(pitchRadians),
-        std::cos(yawRadians) * cosPitch,
-    });
-}
-
 double NormalizeDegrees(double degrees) {
     double normalized = std::fmod(degrees, 360.0);
     if (normalized > 180.0) {
@@ -164,8 +131,6 @@ bool WorldToScreen(const Vec3 &worldPosition, const Esp::CameraState &cameraStat
     double normalizedX = deltaYaw / horizontalHalfFovDegrees;
     double normalizedY = deltaPitch / verticalHalfFovDegrees;
 
-    // Use perspective-correct tangent projection for targets near the visible frustum.
-    // This removes the left/right drift that linear angle mapping causes near screen edges.
     if (std::abs(deltaYaw) < 89.0 && std::abs(deltaPitch) < 89.0) {
         const double tangentX = std::tan(deltaYawRadians) / std::tan(horizontalHalfFovRadians);
         const double tangentY = std::tan(deltaPitchRadians) / std::tan(verticalHalfFovRadians);
@@ -275,6 +240,12 @@ Esp::Esp() {
         AppendClassFailure(lookupFailures, "Vec3", mc_mappings::classes::Vec3);
     }
 
+    jclass localPlayerClass = env->FindClass(mc_mappings::classes::Player);
+    if (localPlayerClass != nullptr) {
+        playerClass = reinterpret_cast<jclass>(env->NewGlobalRef(localPlayerClass));
+        env->DeleteLocalRef(localPlayerClass);
+    }
+
     if (levelClass == nullptr || listClass == nullptr || deltaTrackerTimerClass == nullptr ||
         gameRendererClass == nullptr || cameraClass == nullptr || vec3Class == nullptr ||
         ClearPendingJniException(env, "ESP class lookup")) {
@@ -299,6 +270,10 @@ Esp::Esp() {
                                        mc_mappings::entity::GetEyeY.signature);
     getZMethodID = env->GetMethodID(Entity::clsEntity, mc_mappings::entity::GetZ.name,
                                     mc_mappings::entity::GetZ.signature);
+    if (playerClass != nullptr) {
+        getHealthMethodID = env->GetMethodID(playerClass, mc_mappings::player::GetHealth.name,
+                                             mc_mappings::player::GetHealth.signature);
+    }
     oldXFieldID = env->GetFieldID(Entity::clsEntity, mc_mappings::entity::OldX.name,
                                   mc_mappings::entity::OldX.signature);
     oldYFieldID = env->GetFieldID(Entity::clsEntity, mc_mappings::entity::OldY.name,
@@ -333,6 +308,10 @@ Esp::Esp() {
     if (getZMethodID == nullptr) {
         AppendMemberFailure(lookupFailures, "method", "Entity", mc_mappings::entity::GetZ.name,
                             mc_mappings::entity::GetZ.signature);
+    }
+    if (playerClass != nullptr && getHealthMethodID == nullptr) {
+        AppendMemberFailure(lookupFailures, "method", "Player", mc_mappings::player::GetHealth.name,
+                            mc_mappings::player::GetHealth.signature);
     }
     if (oldXFieldID == nullptr) {
         AppendMemberFailure(lookupFailures, "field", "Entity", mc_mappings::entity::OldX.name,
@@ -652,6 +631,7 @@ void Esp::Tick() {
             env->CallDoubleMethod(playerObj, getYMethodID),
             env->CallDoubleMethod(playerObj, getZMethodID),
             0.0,
+            -1.0f,
         });
         const double currentEyeY = env->CallDoubleMethod(playerObj, getEyeYMethodID);
         if (ClearPendingJniException(env, "target position reads")) {
@@ -663,6 +643,13 @@ void Esp::Tick() {
 
         Target &target = updatedTargets.back();
         target.eyeHeightOffset = currentEyeY - target.y;
+        if (getHealthMethodID != nullptr) {
+            target.health = env->CallFloatMethod(playerObj, getHealthMethodID);
+            if (env->ExceptionCheck()) {
+                env->ExceptionClear();
+                target.health = -1.0f;
+            }
+        }
 
         env->DeleteLocalRef(playerObj);
     }
@@ -713,9 +700,11 @@ void Esp::RenderOverlay(bool drawTracer, bool drawBox, const float *tracerColor,
 
     ImDrawList *drawList = ImGui::GetBackgroundDrawList();
     const ImGuiIO &io = ImGui::GetIO();
-    const ImVec2 tracerStart(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+    const ImVec2 tracerStart(io.DisplaySize.x * 0.5f, io.DisplaySize.y - 42.0f);
     const ImU32 tracerDrawColor = ColorFromArray(tracerColor, IM_COL32(255, 70, 70, 220));
     const ImU32 boxDrawColor = ColorFromArray(boxColor, IM_COL32(255, 70, 70, 210));
+    const ImU32 healthTextColor = IM_COL32(150, 255, 150, 235);
+    const ImU32 distanceTextColor = IM_COL32(245, 248, 255, 235);
     const float tracerLineThickness = std::clamp(tracerThickness, 0.5f, 8.0f);
     const float boxLineThickness = std::clamp(boxThickness, 0.5f, 8.0f);
     const float tracerPointRadius = std::max(2.0f, tracerLineThickness + 1.1f);
@@ -780,22 +769,46 @@ void Esp::RenderOverlay(bool drawTracer, bool drawBox, const float *tracerColor,
 
         ImVec2 headScreenPosition{};
         ImVec2 feetScreenPosition{};
+        ImVec2 boxCenterScreenPosition{};
         const double headWorldY = interpolatedBaseY + target.eyeHeightOffset + 0.18;
         const double feetWorldY = interpolatedBaseY - 0.08;
+        const double boxCenterWorldY = interpolatedBaseY + target.eyeHeightOffset * 0.45;
         const bool headVisible = WorldToScreen({interpolatedX, headWorldY, interpolatedZ}, cameraSnapshot, io.DisplaySize.x,
                                                io.DisplaySize.y, headScreenPosition, false);
         const bool feetVisible = WorldToScreen({interpolatedX, feetWorldY, interpolatedZ}, cameraSnapshot, io.DisplaySize.x,
                                                io.DisplaySize.y, feetScreenPosition, false);
+        const bool boxCenterVisible = WorldToScreen({interpolatedX, boxCenterWorldY, interpolatedZ}, cameraSnapshot,
+                                                    io.DisplaySize.x, io.DisplaySize.y, boxCenterScreenPosition, false);
 
-        if (drawBox && headVisible && feetVisible) {
+        if (drawBox && headVisible && feetVisible && boxCenterVisible) {
             const float top = std::min(headScreenPosition.y, feetScreenPosition.y);
             const float bottom = std::max(headScreenPosition.y, feetScreenPosition.y);
             const float height = bottom - top;
             if (height >= 6.0f) {
-                const float centerX = (headScreenPosition.x + feetScreenPosition.x) * 0.5f;
+                const float centerX = boxCenterScreenPosition.x;
                 const float halfWidth = height * 0.19f;
                 drawList->AddRect(ImVec2(centerX - halfWidth, top), ImVec2(centerX + halfWidth, bottom),
                                   boxDrawColor, 0.0f, 0, boxLineThickness);
+
+                if (target.health >= 0.0f && std::isfinite(target.health)) {
+                    char healthBuffer[32]{};
+                    std::snprintf(healthBuffer, sizeof(healthBuffer), "%.1f HP", target.health);
+                    const ImVec2 healthTextSize = ImGui::CalcTextSize(healthBuffer);
+                    const ImVec2 healthTextPosition(centerX - healthTextSize.x * 0.5f, top - healthTextSize.y - 3.0f);
+                    drawList->AddText(healthTextPosition, healthTextColor, healthBuffer);
+                }
+
+                const double distanceX = interpolatedX - cameraSnapshot.x;
+                const double distanceY = interpolatedBaseY - cameraSnapshot.y;
+                const double distanceZ = interpolatedZ - cameraSnapshot.z;
+                const double distanceMeters = std::sqrt(distanceX * distanceX + distanceY * distanceY + distanceZ * distanceZ);
+                if (IsFinite(distanceMeters)) {
+                    char distanceBuffer[32]{};
+                    std::snprintf(distanceBuffer, sizeof(distanceBuffer), "[%.0fm]", distanceMeters);
+                    const ImVec2 distanceTextSize = ImGui::CalcTextSize(distanceBuffer);
+                    const ImVec2 distanceTextPosition(centerX - distanceTextSize.x * 0.5f, bottom + 4.0f);
+                    drawList->AddText(distanceTextPosition, distanceTextColor, distanceBuffer);
+                }
             }
         }
 

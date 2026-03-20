@@ -18,6 +18,7 @@ public:
         double y{};
         double z{};
         double eyeHeightOffset{};
+        float health{-1.0f};
     };
 
     struct CameraState {
@@ -60,6 +61,7 @@ public:
     jclass gameRendererClass{};
     jclass cameraClass{};
     jclass vec3Class{};
+    jclass playerClass{};
 
     jfieldID levelField{};
     jfieldID deltaTrackerField{};
@@ -79,6 +81,7 @@ public:
     jmethodID getEyeYMethodID{};
     jmethodID getZMethodID{};
     jmethodID getGameTimeDeltaPartialTickMethodID{};
+    jmethodID getHealthMethodID{};
     jmethodID getMainCameraMethodID{};
     jmethodID getCameraPositionMethodID{};
     jmethodID getCameraYawMethodID{};
