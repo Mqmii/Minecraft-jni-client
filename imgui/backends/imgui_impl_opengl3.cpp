@@ -730,8 +730,18 @@ static void ImGui_ImplOpenGL3_DestroyTexture(ImTextureData* tex)
 void ImGui_ImplOpenGL3_UpdateTexture(ImTextureData* tex)
 {
     // FIXME: Consider backing up and restoring
+    ImGui_ImplOpenGL3_Data* backend_data_ptr = ImGui_ImplOpenGL3_GetBackendData();
+    GLint last_pixel_unpack_buffer = 0;
+    bool did_backup_unpack_buffer = false;
     if (tex->Status == ImTextureStatus_WantCreate || tex->Status == ImTextureStatus_WantUpdates)
     {
+#ifdef IMGUI_IMPL_OPENGL_MAY_HAVE_BIND_BUFFER_PIXEL_UNPACK
+        if (backend_data_ptr != nullptr && backend_data_ptr->GlVersion >= 210) { 
+            GL_CALL(glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &last_pixel_unpack_buffer)); 
+            GL_CALL(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)); 
+            did_backup_unpack_buffer = true;
+        }
+#endif
 #ifdef GL_UNPACK_ROW_LENGTH // Not on WebGL/ES
         GL_CALL(glPixelStorei(GL_UNPACK_ROW_LENGTH, 0));
 #endif
@@ -801,6 +811,13 @@ void ImGui_ImplOpenGL3_UpdateTexture(ImTextureData* tex)
     }
     else if (tex->Status == ImTextureStatus_WantDestroy && tex->UnusedFrames > 0)
         ImGui_ImplOpenGL3_DestroyTexture(tex);
+
+    if (did_backup_unpack_buffer)
+    {
+#ifdef IMGUI_IMPL_OPENGL_MAY_HAVE_BIND_BUFFER_PIXEL_UNPACK
+        GL_CALL(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, last_pixel_unpack_buffer));
+#endif
+    }
 }
 
 // If you get an error please report on github. You may try different GL context version or GLSL version. See GL<>GLSL version table at the top of this file.
