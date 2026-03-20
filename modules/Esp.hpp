@@ -91,7 +91,7 @@ public:
     Esp();
     bool IsInitialized() const;
     void Tick();
-    void RenderOverlay(bool drawTracer, bool drawBox, const float *tracerColor, float tracerThickness,
+    void RenderOverlay(bool drawTracer, bool drawBox, bool showDebug, const float *tracerColor, float tracerThickness,
                        const float *boxColor, float boxThickness) const;
 
 private:

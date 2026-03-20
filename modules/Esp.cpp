@@ -5,14 +5,19 @@
 #include <cstdio>
 #include <iostream>
 
+#include <glm/ext/matrix_clip_space.hpp>
+#include <glm/ext/matrix_transform.hpp>
+#include <glm/geometric.hpp>
+#include <glm/ext/vector_float3.hpp>
+#include <glm/ext/vector_float4.hpp>
+#include <glm/trigonometric.hpp>
+
 #include "../classes/Entity.hpp"
 #include "../imgui/imgui.h"
 #include "../jni/JniEnvironment.hpp"
 #include "../jni/MinecraftMappings.hpp"
 
 namespace {
-constexpr double kPi = 3.14159265358979323846;
-
 bool ClearPendingJniException(JNIEnv *env, const char *context) {
     if (env == nullptr || !env->ExceptionCheck()) {
         return false;
@@ -85,8 +90,8 @@ double NormalizeDegrees(double degrees) {
     return normalized;
 }
 
-bool WorldToScreen(const Vec3 &worldPosition, const Esp::CameraState &cameraState, float screenWidth, float screenHeight,
-                   ImVec2 &screenPosition, bool clampOffscreen = true) {
+bool ProjectToNdc(const Vec3 &worldPosition, const Esp::CameraState &cameraState, float screenWidth, float screenHeight,
+                  double &normalizedX, double &normalizedY, bool &inFront) {
     if (!cameraState.valid || screenWidth <= 0.0f || screenHeight <= 0.0f) {
         return false;
     }
@@ -97,51 +102,113 @@ bool WorldToScreen(const Vec3 &worldPosition, const Esp::CameraState &cameraStat
         return false;
     }
 
-    const Vec3 relative = worldPosition - Vec3{cameraState.x, cameraState.y, cameraState.z};
-    const double horizontalDistance = std::sqrt(relative.x * relative.x + relative.z * relative.z);
-    if (!IsFinite(horizontalDistance) || horizontalDistance <= 0.000001) {
+    const float aspectRatio = screenWidth / screenHeight;
+    const float clampedFov = std::clamp(static_cast<float>(cameraState.fovDegrees), 30.0f, 170.0f);
+    const float yawRadians = glm::radians(static_cast<float>(NormalizeDegrees(cameraState.yawDegrees)));
+    const float pitchRadians = glm::radians(static_cast<float>(NormalizeDegrees(-cameraState.pitchDegrees)));
+
+    glm::vec3 eye(static_cast<float>(cameraState.x), static_cast<float>(cameraState.y), static_cast<float>(cameraState.z));
+    glm::vec3 forward(
+        -std::sin(yawRadians) * std::cos(pitchRadians),
+        std::sin(pitchRadians),
+        std::cos(yawRadians) * std::cos(pitchRadians));
+    if (!std::isfinite(forward.x) || !std::isfinite(forward.y) || !std::isfinite(forward.z) ||
+        glm::length(forward) <= 0.0001f) {
         return false;
     }
 
-    const double clampedFov = std::clamp(cameraState.fovDegrees, 30.0, 170.0);
-    const double aspectRatio = static_cast<double>(screenWidth) / static_cast<double>(screenHeight);
-    const double verticalHalfFovRadians = (clampedFov * kPi / 180.0) * 0.5;
-    const double horizontalHalfFovRadians = std::atan(std::tan(verticalHalfFovRadians) * aspectRatio);
-    if (!IsFinite(verticalHalfFovRadians) || !IsFinite(horizontalHalfFovRadians) ||
-        std::abs(verticalHalfFovRadians) <= 0.000001 || std::abs(horizontalHalfFovRadians) <= 0.000001) {
+    const glm::vec3 up(0.0f, 1.0f, 0.0f);
+    const glm::mat4 view = glm::lookAtRH(eye, eye + glm::normalize(forward), up);
+    const glm::mat4 projection = glm::perspectiveRH_NO(glm::radians(clampedFov), aspectRatio, 0.05f, 4096.0f);
+    const glm::vec4 clip = projection * view * glm::vec4(
+        static_cast<float>(worldPosition.x),
+        static_cast<float>(worldPosition.y),
+        static_cast<float>(worldPosition.z),
+        1.0f);
+
+    if (!std::isfinite(clip.x) || !std::isfinite(clip.y) || !std::isfinite(clip.z) || !std::isfinite(clip.w) ||
+        std::abs(clip.w) <= 0.0001f) {
         return false;
     }
 
-    const double targetYaw = std::atan2(-relative.x, relative.z) * 180.0 / kPi;
-    const double targetPitch = std::atan2(relative.y, horizontalDistance) * 180.0 / kPi;
-    const double cameraYaw = NormalizeDegrees(cameraState.yawDegrees);
-    const double cameraPitch = NormalizeDegrees(-cameraState.pitchDegrees);
+    inFront = clip.w > 0.0f;
+    const float inverseW = 1.0f / std::abs(clip.w);
+    normalizedX = static_cast<double>((inFront ? clip.x : -clip.x) * inverseW);
+    normalizedY = static_cast<double>((inFront ? clip.y : -clip.y) * inverseW);
+    return IsFinite(normalizedX) && IsFinite(normalizedY);
+}
 
-    const double deltaYaw = NormalizeDegrees(targetYaw - cameraYaw);
-    const double deltaPitch = NormalizeDegrees(targetPitch - cameraPitch);
-    if (!IsFinite(deltaYaw) || !IsFinite(deltaPitch)) {
+bool ComputeOffscreenIndicatorNormalized(const Vec3 &worldPosition, const Esp::CameraState &cameraState, float screenWidth,
+                                         float screenHeight, double &normalizedX, double &normalizedY) {
+    if (!cameraState.valid || screenWidth <= 0.0f || screenHeight <= 0.0f) {
         return false;
     }
 
-    const double horizontalHalfFovDegrees = horizontalHalfFovRadians * 180.0 / kPi;
-    const double verticalHalfFovDegrees = verticalHalfFovRadians * 180.0 / kPi;
-    const double deltaYawRadians = deltaYaw * kPi / 180.0;
-    const double deltaPitchRadians = deltaPitch * kPi / 180.0;
+    if (!IsFinite(worldPosition.x) || !IsFinite(worldPosition.y) || !IsFinite(worldPosition.z) ||
+        !IsFinite(cameraState.x) || !IsFinite(cameraState.y) || !IsFinite(cameraState.z) ||
+        !IsFinite(cameraState.yawDegrees) || !IsFinite(cameraState.pitchDegrees) || !IsFinite(cameraState.fovDegrees)) {
+        return false;
+    }
 
-    double normalizedX = deltaYaw / horizontalHalfFovDegrees;
-    double normalizedY = deltaPitch / verticalHalfFovDegrees;
+    const float aspectRatio = screenWidth / screenHeight;
+    const float yawRadians = glm::radians(static_cast<float>(NormalizeDegrees(cameraState.yawDegrees)));
+    const float pitchRadians = glm::radians(static_cast<float>(NormalizeDegrees(-cameraState.pitchDegrees)));
+    glm::vec3 eye(static_cast<float>(cameraState.x), static_cast<float>(cameraState.y), static_cast<float>(cameraState.z));
+    glm::vec3 forward(
+        -std::sin(yawRadians) * std::cos(pitchRadians),
+        std::sin(pitchRadians),
+        std::cos(yawRadians) * std::cos(pitchRadians));
+    if (!std::isfinite(forward.x) || !std::isfinite(forward.y) || !std::isfinite(forward.z) ||
+        glm::length(forward) <= 0.0001f) {
+        return false;
+    }
 
-    if (std::abs(deltaYaw) < 89.0 && std::abs(deltaPitch) < 89.0) {
-        const double tangentX = std::tan(deltaYawRadians) / std::tan(horizontalHalfFovRadians);
-        const double tangentY = std::tan(deltaPitchRadians) / std::tan(verticalHalfFovRadians);
-        if (IsFinite(tangentX) && IsFinite(tangentY)) {
-            normalizedX = tangentX;
-            normalizedY = tangentY;
+    const glm::mat4 view = glm::lookAtRH(eye, eye + glm::normalize(forward), glm::vec3(0.0f, 1.0f, 0.0f));
+    const glm::vec4 viewSpace = view * glm::vec4(
+        static_cast<float>(worldPosition.x),
+        static_cast<float>(worldPosition.y),
+        static_cast<float>(worldPosition.z),
+        1.0f);
+    if (!std::isfinite(viewSpace.x) || !std::isfinite(viewSpace.y) || !std::isfinite(viewSpace.z)) {
+        return false;
+    }
+
+    double directionX = static_cast<double>(viewSpace.x) / static_cast<double>(aspectRatio);
+    double directionY = static_cast<double>(viewSpace.y);
+    if (viewSpace.z >= 0.0f) {
+        directionY = -directionY;
+    }
+
+    if (std::abs(directionX) <= 0.000001 && std::abs(directionY) <= 0.000001) {
+        directionY = -1.0;
+    }
+
+    const double scale = 1.0 / std::max(std::abs(directionX), std::abs(directionY));
+    normalizedX = directionX * scale;
+    normalizedY = directionY * scale;
+    return IsFinite(normalizedX) && IsFinite(normalizedY);
+}
+
+bool WorldToScreen(const Vec3 &worldPosition, const Esp::CameraState &cameraState, float screenWidth, float screenHeight,
+                   ImVec2 &screenPosition, bool clampOffscreen = true) {
+    double normalizedX{};
+    double normalizedY{};
+    bool inFront = false;
+    if (!ProjectToNdc(worldPosition, cameraState, screenWidth, screenHeight, normalizedX, normalizedY, inFront)) {
+        return false;
+    }
+
+    if (!clampOffscreen && !inFront) {
+        return false;
+    }
+
+    const bool onScreen = inFront && std::abs(normalizedX) <= 1.0 && std::abs(normalizedY) <= 1.0;
+    if (clampOffscreen && !onScreen) {
+        if (!inFront &&
+            !ComputeOffscreenIndicatorNormalized(worldPosition, cameraState, screenWidth, screenHeight, normalizedX,
+                                                 normalizedY)) {
+            return false;
         }
-    }
-
-    if (!IsFinite(normalizedX) || !IsFinite(normalizedY)) {
-        return false;
     }
 
     const double absX = std::abs(normalizedX);
@@ -153,11 +220,20 @@ bool WorldToScreen(const Vec3 &worldPosition, const Esp::CameraState &cameraStat
         return false;
     }
 
+    const bool offscreenIndicator = clampOffscreen && !onScreen;
+
     // Keep off-screen targets visible by projecting them onto the nearest screen edge.
-    if (clampOffscreen && (absX > 1.0 || absY > 1.0)) {
+    if (offscreenIndicator && (absX > 1.0 || absY > 1.0)) {
         const double scale = 1.0 / std::max(absX, absY);
         clampedX *= scale;
         clampedY *= scale;
+    }
+
+    if (offscreenIndicator) {
+        const double sideSign = clampedX >= 0.0 ? 1.0 : -1.0;
+        const double sideBiasSource = std::max(std::abs(clampedX), 0.0001);
+        clampedY = std::clamp(clampedY / sideBiasSource, -0.72, 0.72);
+        clampedX = sideSign;
     }
 
     const float screenPadding = 18.0f;
@@ -166,6 +242,12 @@ bool WorldToScreen(const Vec3 &worldPosition, const Esp::CameraState &cameraStat
     screenPosition.x = std::clamp(screenPosition.x, screenPadding, screenWidth - screenPadding);
     screenPosition.y = std::clamp(screenPosition.y, screenPadding, screenHeight - screenPadding);
     return true;
+}
+
+bool WorldToScreenNormalized(const Vec3 &worldPosition, const Esp::CameraState &cameraState, float screenWidth,
+                             float screenHeight, double &normalizedX, double &normalizedY) {
+    bool inFront = false;
+    return ProjectToNdc(worldPosition, cameraState, screenWidth, screenHeight, normalizedX, normalizedY, inFront) && inFront;
 }
 } // namespace
 
@@ -680,7 +762,7 @@ void Esp::Tick() {
     SetStatusLocked(updatedCamera.valid ? "Tick OK" : "Tick: camera invalid");
 }
 
-void Esp::RenderOverlay(bool drawTracer, bool drawBox, const float *tracerColor, float tracerThickness,
+void Esp::RenderOverlay(bool drawTracer, bool drawBox, bool showDebug, const float *tracerColor, float tracerThickness,
                         const float *boxColor, float boxThickness) const {
     std::vector<Target> snapshot;
     CameraState cameraSnapshot{};
@@ -712,40 +794,42 @@ void Esp::RenderOverlay(bool drawTracer, bool drawBox, const float *tracerColor,
     const ImU32 textColor = IM_COL32(255, 255, 255, 230);
     char lineBuffer[256]{};
 
-    std::snprintf(lineBuffer, sizeof(lineBuffer), "ESP init=%d local=%d level=%d list=%d cam=%d rcam=%d/%d",
-                  debugSnapshot.initialized ? 1 : 0,
-                  debugSnapshot.localPlayerValid ? 1 : 0,
-                  debugSnapshot.levelValid ? 1 : 0,
-                  debugSnapshot.playerListValid ? 1 : 0,
-                  debugSnapshot.cameraValid ? 1 : 0,
-                  debugSnapshot.renderCameraAvailable ? 1 : 0,
-                  debugSnapshot.renderCameraUsed ? 1 : 0);
-    drawList->AddText(textPosition, textColor, lineBuffer);
-    textPosition.y += 16.0f;
+    if (showDebug) {
+        std::snprintf(lineBuffer, sizeof(lineBuffer), "ESP init=%d local=%d level=%d list=%d cam=%d rcam=%d/%d",
+                      debugSnapshot.initialized ? 1 : 0,
+                      debugSnapshot.localPlayerValid ? 1 : 0,
+                      debugSnapshot.levelValid ? 1 : 0,
+                      debugSnapshot.playerListValid ? 1 : 0,
+                      debugSnapshot.cameraValid ? 1 : 0,
+                      debugSnapshot.renderCameraAvailable ? 1 : 0,
+                      debugSnapshot.renderCameraUsed ? 1 : 0);
+        drawList->AddText(textPosition, textColor, lineBuffer);
+        textPosition.y += 16.0f;
 
-    std::snprintf(lineBuffer, sizeof(lineBuffer), "count players=%d targets=%d", debugSnapshot.playerCount,
-                  debugSnapshot.targetCount);
-    drawList->AddText(textPosition, textColor, lineBuffer);
-    textPosition.y += 16.0f;
+        std::snprintf(lineBuffer, sizeof(lineBuffer), "count players=%d targets=%d", debugSnapshot.playerCount,
+                      debugSnapshot.targetCount);
+        drawList->AddText(textPosition, textColor, lineBuffer);
+        textPosition.y += 16.0f;
 
-    std::snprintf(lineBuffer, sizeof(lineBuffer), "cam xyz=%.2f %.2f %.2f", debugSnapshot.cameraX, debugSnapshot.cameraY,
-                  debugSnapshot.cameraZ);
-    drawList->AddText(textPosition, textColor, lineBuffer);
-    textPosition.y += 16.0f;
+        std::snprintf(lineBuffer, sizeof(lineBuffer), "cam xyz=%.2f %.2f %.2f", debugSnapshot.cameraX, debugSnapshot.cameraY,
+                      debugSnapshot.cameraZ);
+        drawList->AddText(textPosition, textColor, lineBuffer);
+        textPosition.y += 16.0f;
 
-    std::snprintf(lineBuffer, sizeof(lineBuffer), "yaw/pitch/fov=%.2f %.2f %.2f", debugSnapshot.yawDegrees,
-                  debugSnapshot.pitchDegrees, debugSnapshot.fovDegrees);
-    drawList->AddText(textPosition, textColor, lineBuffer);
-    textPosition.y += 16.0f;
+        std::snprintf(lineBuffer, sizeof(lineBuffer), "yaw/pitch/fov=%.2f %.2f %.2f", debugSnapshot.yawDegrees,
+                      debugSnapshot.pitchDegrees, debugSnapshot.fovDegrees);
+        drawList->AddText(textPosition, textColor, lineBuffer);
+        textPosition.y += 16.0f;
 
-    std::snprintf(lineBuffer, sizeof(lineBuffer), "frameTime=%.2f", frameTime);
-    drawList->AddText(textPosition, textColor, lineBuffer);
-    textPosition.y += 16.0f;
+        std::snprintf(lineBuffer, sizeof(lineBuffer), "frameTime=%.2f", frameTime);
+        drawList->AddText(textPosition, textColor, lineBuffer);
+        textPosition.y += 16.0f;
 
-    drawList->AddText(textPosition, IM_COL32(255, 210, 120, 230), debugSnapshot.lastStatus.c_str());
-    textPosition.y += 16.0f;
-    if (!debugSnapshot.lookupDetails.empty()) {
-        drawList->AddText(textPosition, IM_COL32(255, 150, 150, 230), debugSnapshot.lookupDetails.c_str());
+        drawList->AddText(textPosition, IM_COL32(255, 210, 120, 230), debugSnapshot.lastStatus.c_str());
+        textPosition.y += 16.0f;
+        if (!debugSnapshot.lookupDetails.empty()) {
+            drawList->AddText(textPosition, IM_COL32(255, 150, 150, 230), debugSnapshot.lookupDetails.c_str());
+        }
     }
 
     if (snapshot.empty() || !cameraSnapshot.valid) {
@@ -769,45 +853,63 @@ void Esp::RenderOverlay(bool drawTracer, bool drawBox, const float *tracerColor,
 
         ImVec2 headScreenPosition{};
         ImVec2 feetScreenPosition{};
-        ImVec2 boxCenterScreenPosition{};
         const double headWorldY = interpolatedBaseY + target.eyeHeightOffset + 0.18;
         const double feetWorldY = interpolatedBaseY - 0.08;
-        const double boxCenterWorldY = interpolatedBaseY + target.eyeHeightOffset * 0.45;
-        const bool headVisible = WorldToScreen({interpolatedX, headWorldY, interpolatedZ}, cameraSnapshot, io.DisplaySize.x,
-                                               io.DisplaySize.y, headScreenPosition, false);
-        const bool feetVisible = WorldToScreen({interpolatedX, feetWorldY, interpolatedZ}, cameraSnapshot, io.DisplaySize.x,
-                                               io.DisplaySize.y, feetScreenPosition, false);
-        const bool boxCenterVisible = WorldToScreen({interpolatedX, boxCenterWorldY, interpolatedZ}, cameraSnapshot,
-                                                    io.DisplaySize.x, io.DisplaySize.y, boxCenterScreenPosition, false);
+        double headNormalizedX{};
+        double headNormalizedY{};
+        double feetNormalizedX{};
+        double feetNormalizedY{};
+        const bool headProjected = WorldToScreenNormalized({interpolatedX, headWorldY, interpolatedZ}, cameraSnapshot,
+                                                           io.DisplaySize.x, io.DisplaySize.y, headNormalizedX,
+                                                           headNormalizedY);
+        const bool feetProjected = WorldToScreenNormalized({interpolatedX, feetWorldY, interpolatedZ}, cameraSnapshot,
+                                                           io.DisplaySize.x, io.DisplaySize.y, feetNormalizedX,
+                                                           feetNormalizedY);
 
-        if (drawBox && headVisible && feetVisible && boxCenterVisible) {
-            const float top = std::min(headScreenPosition.y, feetScreenPosition.y);
-            const float bottom = std::max(headScreenPosition.y, feetScreenPosition.y);
-            const float height = bottom - top;
-            if (height >= 6.0f) {
-                const float centerX = boxCenterScreenPosition.x;
-                const float halfWidth = height * 0.19f;
-                drawList->AddRect(ImVec2(centerX - halfWidth, top), ImVec2(centerX + halfWidth, bottom),
-                                  boxDrawColor, 0.0f, 0, boxLineThickness);
+        if (drawBox && headProjected && feetProjected) {
+            const double minNormalizedX = std::min(headNormalizedX, feetNormalizedX);
+            const double maxNormalizedX = std::max(headNormalizedX, feetNormalizedX);
+            const double minNormalizedY = std::min(headNormalizedY, feetNormalizedY);
+            const double maxNormalizedY = std::max(headNormalizedY, feetNormalizedY);
 
-                if (target.health >= 0.0f && std::isfinite(target.health)) {
-                    char healthBuffer[32]{};
-                    std::snprintf(healthBuffer, sizeof(healthBuffer), "%.1f HP", target.health);
-                    const ImVec2 healthTextSize = ImGui::CalcTextSize(healthBuffer);
-                    const ImVec2 healthTextPosition(centerX - healthTextSize.x * 0.5f, top - healthTextSize.y - 3.0f);
-                    drawList->AddText(healthTextPosition, healthTextColor, healthBuffer);
-                }
+            if (!(maxNormalizedX < -1.0 || minNormalizedX > 1.0 || maxNormalizedY < -1.0 || minNormalizedY > 1.0)) {
+                const double clampedHeadX = std::clamp(headNormalizedX, -1.0, 1.0);
+                const double clampedHeadY = std::clamp(headNormalizedY, -1.0, 1.0);
+                const double clampedFeetX = std::clamp(feetNormalizedX, -1.0, 1.0);
+                const double clampedFeetY = std::clamp(feetNormalizedY, -1.0, 1.0);
+                headScreenPosition.x = static_cast<float>((clampedHeadX + 1.0) * 0.5 * io.DisplaySize.x);
+                headScreenPosition.y = static_cast<float>((1.0 - clampedHeadY) * 0.5 * io.DisplaySize.y);
+                feetScreenPosition.x = static_cast<float>((clampedFeetX + 1.0) * 0.5 * io.DisplaySize.x);
+                feetScreenPosition.y = static_cast<float>((1.0 - clampedFeetY) * 0.5 * io.DisplaySize.y);
 
-                const double distanceX = interpolatedX - cameraSnapshot.x;
-                const double distanceY = interpolatedBaseY - cameraSnapshot.y;
-                const double distanceZ = interpolatedZ - cameraSnapshot.z;
-                const double distanceMeters = std::sqrt(distanceX * distanceX + distanceY * distanceY + distanceZ * distanceZ);
-                if (IsFinite(distanceMeters)) {
-                    char distanceBuffer[32]{};
-                    std::snprintf(distanceBuffer, sizeof(distanceBuffer), "[%.0fm]", distanceMeters);
-                    const ImVec2 distanceTextSize = ImGui::CalcTextSize(distanceBuffer);
-                    const ImVec2 distanceTextPosition(centerX - distanceTextSize.x * 0.5f, bottom + 4.0f);
-                    drawList->AddText(distanceTextPosition, distanceTextColor, distanceBuffer);
+                const float top = std::min(headScreenPosition.y, feetScreenPosition.y);
+                const float bottom = std::max(headScreenPosition.y, feetScreenPosition.y);
+                const float height = bottom - top;
+                if (height >= 6.0f) {
+                    const float centerX = (headScreenPosition.x + feetScreenPosition.x) * 0.5f;
+                    const float halfWidth = height * 0.19f;
+                    drawList->AddRect(ImVec2(centerX - halfWidth, top), ImVec2(centerX + halfWidth, bottom),
+                                      boxDrawColor, 0.0f, 0, boxLineThickness);
+
+                    if (target.health >= 0.0f && std::isfinite(target.health)) {
+                        char healthBuffer[32]{};
+                        std::snprintf(healthBuffer, sizeof(healthBuffer), "%.1f HP", target.health);
+                        const ImVec2 healthTextSize = ImGui::CalcTextSize(healthBuffer);
+                        const ImVec2 healthTextPosition(centerX - healthTextSize.x * 0.5f, top - healthTextSize.y - 3.0f);
+                        drawList->AddText(healthTextPosition, healthTextColor, healthBuffer);
+                    }
+
+                    const double distanceX = interpolatedX - cameraSnapshot.x;
+                    const double distanceY = interpolatedBaseY - cameraSnapshot.y;
+                    const double distanceZ = interpolatedZ - cameraSnapshot.z;
+                    const double distanceMeters = std::sqrt(distanceX * distanceX + distanceY * distanceY + distanceZ * distanceZ);
+                    if (IsFinite(distanceMeters)) {
+                        char distanceBuffer[32]{};
+                        std::snprintf(distanceBuffer, sizeof(distanceBuffer), "[%.0fm]", distanceMeters);
+                        const ImVec2 distanceTextSize = ImGui::CalcTextSize(distanceBuffer);
+                        const ImVec2 distanceTextPosition(centerX - distanceTextSize.x * 0.5f, bottom + 4.0f);
+                        drawList->AddText(distanceTextPosition, distanceTextColor, distanceBuffer);
+                    }
                 }
             }
         }

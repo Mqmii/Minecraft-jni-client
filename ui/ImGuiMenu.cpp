@@ -225,8 +225,9 @@ void ImGuiMenu::DrawMenu() {
     DrawTriggerBotHotkeyControl();
     ImGui::Checkbox("Tracer", &state_.tracer);
     ImGui::Checkbox("Box ESP", &state_.boxEsp);
+    ImGui::Checkbox("ESP Debug", &state_.espDebug);
 
-    if (state_.tracer || state_.boxEsp) {
+    if (state_.tracer || state_.boxEsp || state_.espDebug) {
         ImGui::Separator();
     }
 
@@ -271,9 +272,9 @@ void ImGuiMenu::RenderFrame() {
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
-    if (esp_ != nullptr && (state_.tracer || state_.boxEsp)) {
+    if (esp_ != nullptr && (state_.tracer || state_.boxEsp || state_.espDebug)) {
         esp_->Tick();
-        esp_->RenderOverlay(state_.tracer, state_.boxEsp, state_.tracerColor, state_.tracerThickness,
+        esp_->RenderOverlay(state_.tracer, state_.boxEsp, state_.espDebug, state_.tracerColor, state_.tracerThickness,
                             state_.boxColor, state_.boxThickness);
     }
 

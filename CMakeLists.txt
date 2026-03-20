@@ -47,6 +47,7 @@ add_library(MinecraftWrapperJNI SHARED
 
 target_include_directories(MinecraftWrapperJNI PRIVATE
         ${JNI_INCLUDE_DIRS}
+        glm
         imgui
         imgui/backends
         minhook/include
