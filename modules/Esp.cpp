@@ -230,10 +230,24 @@ bool WorldToScreen(const Vec3 &worldPosition, const Esp::CameraState &cameraStat
     }
 
     if (offscreenIndicator) {
-        const double sideSign = clampedX >= 0.0 ? 1.0 : -1.0;
-        const double sideBiasSource = std::max(std::abs(clampedX), 0.0001);
-        clampedY = std::clamp(clampedY / sideBiasSource, -0.72, 0.72);
-        clampedX = sideSign;
+        const double trueHeightDelta = worldPosition.y - cameraState.y;
+        const bool verticalPriority = std::abs(trueHeightDelta) >= 2.0;
+
+        if (verticalPriority) {
+            const double verticalSign = trueHeightDelta >= 0.0 ? 1.0 : -1.0;
+            double horizontalSpread = clampedX * 2.4;
+            if (std::abs(horizontalSpread) < 0.12 && std::abs(clampedX) > 0.02) {
+                horizontalSpread = std::copysign(0.12, clampedX);
+            }
+            clampedX = std::clamp(horizontalSpread, -0.78, 0.78);
+            clampedY = verticalSign;
+        } else {
+            const double horizontalStrength = std::abs(clampedX);
+            const double sideSign = clampedX >= 0.0 ? 1.0 : -1.0;
+            const double sideBiasSource = std::max(horizontalStrength, 0.0001);
+            clampedY = std::clamp(clampedY / sideBiasSource, -0.72, 0.72);
+            clampedX = sideSign;
+        }
     }
 
     const float screenPadding = 18.0f;
@@ -501,6 +515,42 @@ Esp::Esp() {
         SetLookupDebugState(debugState_, "ESP initialized", lookupFailures);
     }
     std::cout << "[+] ESP camera/FOV initialization ready." << std::endl;
+}
+
+Esp::~Esp() {
+    JNIEnv *env = JniEnvironment::GetCurrentEnv();
+    if (env == nullptr) {
+        return;
+    }
+
+    if (levelClass != nullptr) {
+        env->DeleteGlobalRef(levelClass);
+        levelClass = nullptr;
+    }
+    if (listClass != nullptr) {
+        env->DeleteGlobalRef(listClass);
+        listClass = nullptr;
+    }
+    if (deltaTrackerTimerClass != nullptr) {
+        env->DeleteGlobalRef(deltaTrackerTimerClass);
+        deltaTrackerTimerClass = nullptr;
+    }
+    if (gameRendererClass != nullptr) {
+        env->DeleteGlobalRef(gameRendererClass);
+        gameRendererClass = nullptr;
+    }
+    if (cameraClass != nullptr) {
+        env->DeleteGlobalRef(cameraClass);
+        cameraClass = nullptr;
+    }
+    if (vec3Class != nullptr) {
+        env->DeleteGlobalRef(vec3Class);
+        vec3Class = nullptr;
+    }
+    if (playerClass != nullptr) {
+        env->DeleteGlobalRef(playerClass);
+        playerClass = nullptr;
+    }
 }
 
 bool Esp::IsInitialized() const {
@@ -790,6 +840,7 @@ void Esp::RenderOverlay(bool drawTracer, bool drawBox, bool showDebug, const flo
     const float tracerLineThickness = std::clamp(tracerThickness, 0.5f, 8.0f);
     const float boxLineThickness = std::clamp(boxThickness, 0.5f, 8.0f);
     const float tracerPointRadius = std::max(2.0f, tracerLineThickness + 1.1f);
+    const float healthFontSize = ImGui::GetFontSize() + 3.0f;
     ImVec2 textPosition(15.0f, 15.0f);
     const ImU32 textColor = IM_COL32(255, 255, 255, 230);
     char lineBuffer[256]{};
@@ -893,10 +944,17 @@ void Esp::RenderOverlay(bool drawTracer, bool drawBox, bool showDebug, const flo
 
                     if (target.health >= 0.0f && std::isfinite(target.health)) {
                         char healthBuffer[32]{};
-                        std::snprintf(healthBuffer, sizeof(healthBuffer), "%.1f HP", target.health);
-                        const ImVec2 healthTextSize = ImGui::CalcTextSize(healthBuffer);
-                        const ImVec2 healthTextPosition(centerX - healthTextSize.x * 0.5f, top - healthTextSize.y - 3.0f);
-                        drawList->AddText(healthTextPosition, healthTextColor, healthBuffer);
+                        const float healthValue = std::max(target.health, 0.0f);
+                        std::snprintf(healthBuffer, sizeof(healthBuffer), "%.0f HP", healthValue);
+                        ImVec2 healthTextSize = ImGui::CalcTextSize(healthBuffer);
+                        const float healthTextScale = healthFontSize / std::max(ImGui::GetFontSize(), 1.0f);
+                        healthTextSize.x *= healthTextScale;
+                        healthTextSize.y *= healthTextScale;
+                        ImVec2 healthTextPosition(centerX - healthTextSize.x * 0.5f, top - healthFontSize - 4.0f);
+                        healthTextPosition.x = std::clamp(healthTextPosition.x, 4.0f,
+                                                          io.DisplaySize.x - healthTextSize.x - 4.0f);
+                        healthTextPosition.y = std::max(4.0f, healthTextPosition.y);
+                        drawList->AddText(nullptr, healthFontSize, healthTextPosition, healthTextColor, healthBuffer);
                     }
 
                     const double distanceX = interpolatedX - cameraSnapshot.x;

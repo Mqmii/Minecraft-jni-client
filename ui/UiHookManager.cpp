@@ -1,5 +1,6 @@
 ﻿#include "UiHookManager.hpp"
 
+#include <cstdint>
 #include <iostream>
 
 #include "MinHook.h"
@@ -31,6 +32,7 @@ bool UiHookManager::Initialize() {
 
     instance_ = this;
     shuttingDown_ = false;
+    loggedFirstRenderCallback_ = false;
 
     const MH_STATUS initStatus = MH_Initialize();
     if (initStatus != MH_OK && initStatus != MH_ERROR_ALREADY_INITIALIZED) {
@@ -117,6 +119,7 @@ bool UiHookManager::TryInstallHooks() {
 }
 
 void UiHookManager::Shutdown() {
+    std::cout << "[UI] Shutdown requested." << std::endl;
     shuttingDown_ = true;
 
     if (minHookInitialized_) {
@@ -157,6 +160,7 @@ void UiHookManager::Shutdown() {
     if (instance_ == this) {
         instance_ = nullptr;
     }
+    std::cout << "[UI] Shutdown complete." << std::endl;
 }
 
 void UiHookManager::SetEsp(Esp *esp) {
@@ -177,6 +181,8 @@ bool UiHookManager::AttachToWindow(HWND hWnd) {
     }
 
     if (window_ != hWnd) {
+        std::cout << "[UI] Binding to window 0x" << std::hex << reinterpret_cast<uintptr_t>(hWnd) << std::dec
+                  << std::endl;
         if (menu_.IsInitialized()) {
             const bool canShutdownRenderer = renderContext_ != nullptr && wglGetCurrentContext() == renderContext_;
             menu_.Shutdown(canShutdownRenderer);
@@ -207,6 +213,10 @@ bool UiHookManager::AttachToWindow(HWND hWnd) {
 
     originalWndProc_ = currentWndProc != nullptr ? currentWndProc : previousWndProc;
     wndProcHooked_ = originalWndProc_ != nullptr;
+    if (wndProcHooked_) {
+        std::cout << "[UI] WndProc hook active for window 0x" << std::hex << reinterpret_cast<uintptr_t>(window_)
+                  << std::dec << std::endl;
+    }
     return wndProcHooked_;
 }
 
@@ -270,9 +280,14 @@ bool UiHookManager::ObserveStableRenderTarget(HWND hWnd, HGLRC context) {
         observedWindow_ = hWnd;
         observedRenderContext_ = context;
         observedRenderTargetHits_ = 1;
+        std::cout << "[UI] Observing render target window=0x" << std::hex << reinterpret_cast<uintptr_t>(hWnd)
+                  << " context=0x" << reinterpret_cast<uintptr_t>(context) << std::dec << std::endl;
     }
 
-    constexpr unsigned int kRequiredStableHits = 3;
+    constexpr unsigned int kRequiredStableHits = 10;
+    if (observedRenderTargetHits_ == kRequiredStableHits) {
+        std::cout << "[UI] Render target stabilized after " << observedRenderTargetHits_ << " hits." << std::endl;
+    }
     return observedRenderTargetHits_ >= kRequiredStableHits;
 }
 
@@ -315,10 +330,22 @@ BOOL UiHookManager::RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn)
         ~SwapHookReset() { flag = false; }
     } reset{inSwapHook_};
 
+    std::scoped_lock renderLock(renderMutex_);
+
+    if (!loggedFirstRenderCallback_) {
+        std::cout << "[UI] Render callback entered for the first time." << std::endl;
+        loggedFirstRenderCallback_ = true;
+    }
+
     const HGLRC currentContext = wglGetCurrentContext();
     if (currentContext == nullptr) {
+        if (!loggedMissingContext_) {
+            std::cout << "[UI] Swap callback observed without an active OpenGL context." << std::endl;
+            loggedMissingContext_ = true;
+        }
         return originalFn(hDc);
     }
+    loggedMissingContext_ = false;
 
     if (HWND candidateWindow = ResolveGameWindow(hDc); candidateWindow != nullptr) {
         const bool isBoundRenderTarget = window_ == candidateWindow && renderContext_ == currentContext;
@@ -346,6 +373,9 @@ BOOL UiHookManager::RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn)
                     std::cout << "[!] ERROR: Failed to initialize ImGui." << std::endl;
                     return originalFn(hDc);
                 }
+                std::cout << "[UI] ImGui initialized for window 0x" << std::hex
+                          << reinterpret_cast<uintptr_t>(window_) << " context=0x"
+                          << reinterpret_cast<uintptr_t>(renderContext_) << std::dec << std::endl;
             }
 
             menu_.RenderFrame();
@@ -376,6 +406,7 @@ LRESULT CALLBACK UiHookManager::HookedWndProc(HWND hWnd, UINT uMsg, WPARAM wPara
     }
 
     CallbackScope callbackScope(instance->activeWndProcCalls_);
+    std::scoped_lock renderLock(instance->renderMutex_);
 
     if (!instance->shuttingDown_ && instance->menu_.HandleWndProc(hWnd, uMsg, wParam, lParam)) {
         return 0;

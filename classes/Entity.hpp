@@ -11,6 +11,7 @@ public:
     Minecraft *mc{};
 
     explicit Entity(Minecraft *pmc);
+    ~Entity();
 };
 
 class LocalPlayer {
@@ -23,6 +24,7 @@ private:
 
 public:
     explicit LocalPlayer(Minecraft *pmc);
+    ~LocalPlayer();
     void Sprint();
     static jobject getLocalPlayerObject();
 

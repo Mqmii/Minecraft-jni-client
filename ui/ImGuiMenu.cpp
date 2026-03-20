@@ -1,6 +1,8 @@
 #include "ImGuiMenu.hpp"
 
 #include <cfloat>
+#include <cstdint>
+#include <iostream>
 #include <sstream>
 #include <string>
 
@@ -88,20 +90,39 @@ bool ImGuiMenu::Initialize(HWND window) {
         return true;
     }
 
+    std::cout << "[MENU] Creating ImGui context for window 0x" << std::hex << reinterpret_cast<uintptr_t>(window)
+              << std::dec << std::endl;
+
     ImGui::CreateContext();
 
     ImGui::StyleColorsDark();
+
+    ImGuiIO &io = ImGui::GetIO();
+    io.Fonts->Clear();
+    io.Fonts->AddFontDefault();
 
     if (!ImGui_ImplWin32_Init(window)) {
         ImGui::DestroyContext();
         return false;
     }
 
-    if (!ImGui_ImplOpenGL3_Init()) {
+    if (!ImGui_ImplOpenGL3_Init("#version 150")) {
         ImGui_ImplWin32_Shutdown();
         ImGui::DestroyContext();
         return false;
     }
+
+    io.IniFilename = nullptr;
+    io.LogFilename = nullptr;
+    ImGui_ImplOpenGL3_DestroyDeviceObjects();
+    if (!ImGui_ImplOpenGL3_CreateDeviceObjects()) {
+        std::cout << "[MENU] Failed to create OpenGL device objects." << std::endl;
+        ImGui_ImplOpenGL3_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        ImGui::DestroyContext();
+        return false;
+    }
+    std::cout << "[MENU] Font atlas and OpenGL device objects created successfully." << std::endl;
 
     window_ = window;
     showMenu_ = false;
@@ -110,7 +131,9 @@ bool ImGuiMenu::Initialize(HWND window) {
     triggerBotHotkeyWasDown_ = false;
     waitingForTriggerBotHotkey_ = false;
     triggerBotHotkey_ = VK_LMENU;
+    loggedFirstRenderFrame_ = false;
     initialized_ = true;
+    std::cout << "[MENU] ImGuiMenu initialization complete." << std::endl;
     return true;
 }
 
@@ -118,6 +141,8 @@ void ImGuiMenu::Shutdown(bool shutdownRenderer) {
     if (!initialized_) {
         return;
     }
+
+    std::cout << "[MENU] Shutdown requested. shutdownRenderer=" << (shutdownRenderer ? 1 : 0) << std::endl;
 
     showMenu_ = false;
     ApplyMenuInputState();
@@ -142,6 +167,8 @@ void ImGuiMenu::Shutdown(bool shutdownRenderer) {
     triggerBotHotkeyWasDown_ = false;
     waitingForTriggerBotHotkey_ = false;
     window_ = nullptr;
+    loggedFirstRenderFrame_ = false;
+    std::cout << "[MENU] Shutdown complete." << std::endl;
 }
 
 void ImGuiMenu::UpdateToggleState() {
@@ -169,6 +196,7 @@ void ImGuiMenu::UpdateTriggerBotHotkeyState() {
 
 void ImGuiMenu::ToggleMenu() {
     showMenu_ = !showMenu_;
+    std::cout << "[MENU] INSERT toggle -> " << (showMenu_ ? "visible" : "hidden") << std::endl;
     ApplyMenuInputState();
 }
 
@@ -244,6 +272,22 @@ void ImGuiMenu::DrawMenu() {
     ImGui::End();
 }
 
+void ImGuiMenu::DrawModuleStatusOverlay() const {
+    ImDrawList *drawList = ImGui::GetBackgroundDrawList();
+    if (drawList == nullptr) {
+        return;
+    }
+
+    const ImVec2 basePosition(14.0f, 14.0f);
+    const float fontSize = ImGui::GetFontSize() + 5.0f;
+    const char *statusText = state_.triggerBot ? "TriggerBot: ON" : "TriggerBot: OFF";
+    const ImU32 statusColor = state_.triggerBot ? IM_COL32(150, 255, 170, 235) : IM_COL32(255, 170, 170, 235);
+    const ImU32 shadowColor = IM_COL32(0, 0, 0, 185);
+
+    drawList->AddText(nullptr, fontSize, ImVec2(basePosition.x + 1.0f, basePosition.y + 1.0f), shadowColor, statusText);
+    drawList->AddText(nullptr, fontSize, basePosition, statusColor, statusText);
+}
+
 void ImGuiMenu::DrawTriggerBotHotkeyControl() {
     ImGui::TextDisabled("Hotkey:");
     ImGui::SameLine();
@@ -266,11 +310,18 @@ void ImGuiMenu::RenderFrame() {
         return;
     }
 
+    if (!loggedFirstRenderFrame_) {
+        std::cout << "[MENU] First RenderFrame call received." << std::endl;
+        loggedFirstRenderFrame_ = true;
+    }
+
     UpdateToggleState();
 
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
+
+    DrawModuleStatusOverlay();
 
     if (esp_ != nullptr && (state_.tracer || state_.boxEsp || state_.espDebug)) {
         esp_->Tick();
@@ -295,7 +346,8 @@ bool ImGuiMenu::HandleWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         return true;
     }
 
-    if ((uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && wParam == VK_INSERT) {
+    const bool isInitialKeyPress = (lParam & (1LL << 30)) == 0;
+    if ((uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && wParam == VK_INSERT && isInitialKeyPress) {
         ToggleMenu();
         insertWasDown_ = true;
         return true;

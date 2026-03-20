@@ -31,6 +31,18 @@ FastBreak::FastBreak(Minecraft *p_mc) : env(JniEnvironment::GetCurrentEnv()), mc
     env->DeleteLocalRef(cls_Gamemode);
 }
 
+FastBreak::~FastBreak() {
+    JNIEnv *currentEnv = JniEnvironment::GetCurrentEnv();
+    if (currentEnv == nullptr) {
+        return;
+    }
+
+    if (obj_Gamemode != nullptr) {
+        currentEnv->DeleteGlobalRef(obj_Gamemode);
+        obj_Gamemode = nullptr;
+    }
+}
+
 void FastBreak::break_fast() const {
     env->SetIntField(obj_Gamemode, fid_destroydelay, -5);
 }

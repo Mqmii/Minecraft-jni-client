@@ -23,6 +23,18 @@ HitResult::HitResult(Minecraft *p_mc)
     }
 }
 
+HitResult::~HitResult() {
+    JNIEnv *currentEnv = JniEnvironment::GetCurrentEnv();
+    if (currentEnv == nullptr) {
+        return;
+    }
+
+    if (hitResultClass != nullptr) {
+        currentEnv->DeleteGlobalRef(hitResultClass);
+        hitResultClass = nullptr;
+    }
+}
+
 jobject HitResult::getHitResultObject() const {
     jobject localinstance = env->GetObjectField(mc->getMcInstance(), hitResultFieldID);
     return localinstance;
@@ -34,6 +46,18 @@ BlockHitResult::BlockHitResult(Minecraft *p_mc) : HitResult(p_mc) {
     env->DeleteLocalRef(localclass);
     if (clsBlockHitresult == nullptr) {
         std::cout << "[ERROR] BlockHitResult class not found." << std::endl;
+    }
+}
+
+BlockHitResult::~BlockHitResult() {
+    JNIEnv *currentEnv = JniEnvironment::GetCurrentEnv();
+    if (currentEnv == nullptr) {
+        return;
+    }
+
+    if (clsBlockHitresult != nullptr) {
+        currentEnv->DeleteGlobalRef(clsBlockHitresult);
+        clsBlockHitresult = nullptr;
     }
 }
 
@@ -100,6 +124,26 @@ EntityHitResult::EntityHitResult(Minecraft *p_mc) : HitResult(p_mc) {
         std::cout << "[ERROR] Start Attack Method is missing!" << std::endl;
     }
     env->DeleteLocalRef(localComponent);
+}
+
+EntityHitResult::~EntityHitResult() {
+    JNIEnv *currentEnv = JniEnvironment::GetCurrentEnv();
+    if (currentEnv == nullptr) {
+        return;
+    }
+
+    if (clsEntityHitResult != nullptr) {
+        currentEnv->DeleteGlobalRef(clsEntityHitResult);
+        clsEntityHitResult = nullptr;
+    }
+    if (clsPlayer != nullptr) {
+        currentEnv->DeleteGlobalRef(clsPlayer);
+        clsPlayer = nullptr;
+    }
+    if (clsEntity != nullptr) {
+        currentEnv->DeleteGlobalRef(clsEntity);
+        clsEntity = nullptr;
+    }
 }
 
 void EntityHitResult::isEntity() const {

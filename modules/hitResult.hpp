@@ -13,6 +13,7 @@ protected:
 
 public:
     explicit HitResult(Minecraft *p_mc);
+    virtual ~HitResult();
 
     [[nodiscard]] jobject getHitResultObject() const;
 };
@@ -23,6 +24,7 @@ public:
     jobject obj_Blockhitresult{};
 
     explicit BlockHitResult(Minecraft *p_mc);
+    ~BlockHitResult() override;
 
     void isBlock() const;
 };
@@ -42,6 +44,7 @@ public:
     jmethodID mid_isAlive{};
 
     explicit EntityHitResult(Minecraft *p_mc);
+    ~EntityHitResult() override;
     void isEntity() const;
     bool isAttackReady() const;
 };

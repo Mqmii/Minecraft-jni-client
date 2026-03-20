@@ -37,6 +37,7 @@ private:
     void UpdateToggleState();
     void UpdateTriggerBotHotkeyState();
     void ToggleMenu();
+    void DrawModuleStatusOverlay() const;
     void DrawMenu();
     void DrawTriggerBotHotkeyControl();
     bool TryBindTriggerBotHotkey(UINT uMsg, WPARAM wParam);
@@ -45,6 +46,7 @@ private:
     bool showMenu_ = false;
     bool menuInputEnabled_ = false;
     bool insertWasDown_ = false;
+    bool loggedFirstRenderFrame_ = false;
     bool triggerBotHotkeyWasDown_ = false;
     bool waitingForTriggerBotHotkey_ = false;
     int cursorVisibilityAdjustments_ = 0;

@@ -8,6 +8,7 @@ class Minecraft {
 
 public:
     Minecraft();
+    ~Minecraft();
 
     [[nodiscard]] static jobject getMcInstance();
 

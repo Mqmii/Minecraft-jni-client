@@ -89,6 +89,7 @@ public:
     jmethodID getRenderFovMethodID{};
 
     Esp();
+    ~Esp();
     bool IsInitialized() const;
     void Tick();
     void RenderOverlay(bool drawTracer, bool drawBox, bool showDebug, const float *tracerColor, float tracerThickness,

@@ -20,6 +20,22 @@ Minecraft::Minecraft() : env(JniEnvironment::GetCurrentEnv()) {
     env->DeleteLocalRef(localInstance);
 }
 
+Minecraft::~Minecraft() {
+    JNIEnv *currentEnv = JniEnvironment::GetCurrentEnv();
+    if (currentEnv == nullptr) {
+        return;
+    }
+
+    if (mcInstance != nullptr) {
+        currentEnv->DeleteGlobalRef(mcInstance);
+        mcInstance = nullptr;
+    }
+    if (minecraftClass != nullptr) {
+        currentEnv->DeleteGlobalRef(minecraftClass);
+        minecraftClass = nullptr;
+    }
+}
+
 jobject Minecraft::getMcInstance() {
     return mcInstance;
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <mutex>
 #include <windows.h>
 
 #include "ImGuiMenu.hpp"
@@ -56,7 +57,10 @@ private:
     bool wndProcHooked_ = false;
     bool swapHookInstalled_ = false;
     bool wglHookInstalled_ = false;
+    bool loggedMissingContext_ = false;
+    bool loggedFirstRenderCallback_ = false;
     std::atomic_bool shuttingDown_ = false;
     std::atomic_uint32_t activeSwapCalls_ = 0;
     std::atomic_uint32_t activeWndProcCalls_ = 0;
+    mutable std::recursive_mutex renderMutex_;
 };

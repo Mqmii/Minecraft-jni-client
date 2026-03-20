@@ -10,6 +10,19 @@ Entity::Entity(Minecraft *pmc) : env(JniEnvironment::GetCurrentEnv()), mc(pmc) {
     jclass localclass = env->FindClass(mc_mappings::classes::Entity);
     (void) localclass;
     clsEntity = reinterpret_cast<jclass>(env->NewGlobalRef(localclass));
+    env->DeleteLocalRef(localclass);
+}
+
+Entity::~Entity() {
+    JNIEnv *currentEnv = JniEnvironment::GetCurrentEnv();
+    if (currentEnv == nullptr) {
+        return;
+    }
+
+    if (clsEntity != nullptr) {
+        currentEnv->DeleteGlobalRef(clsEntity);
+        clsEntity = nullptr;
+    }
 }
 
 LocalPlayer::LocalPlayer(Minecraft *pmc) : env(JniEnvironment::GetCurrentEnv()), mc(pmc) {
@@ -34,6 +47,19 @@ LocalPlayer::LocalPlayer(Minecraft *pmc) : env(JniEnvironment::GetCurrentEnv()),
     if (SetSprinting == nullptr) {
         std::cout << "[ERROR] SetSprinting method not found." << std::endl;
     }
+}
+
+LocalPlayer::~LocalPlayer() {
+    JNIEnv *currentEnv = JniEnvironment::GetCurrentEnv();
+    if (currentEnv == nullptr) {
+        return;
+    }
+
+    if (playerClass != nullptr) {
+        currentEnv->DeleteGlobalRef(playerClass);
+        playerClass = nullptr;
+    }
+    playerFieldID = nullptr;
 }
 
 void LocalPlayer::Sprint() {

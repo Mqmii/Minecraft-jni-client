@@ -1,5 +1,6 @@
 ﻿#include "JniEnvironment.hpp"
 
+#include <cstdint>
 #include <iostream>
 #include <windows.h>
 
@@ -7,6 +8,7 @@ using GetCreatedJavaVMsFn = jint(JNICALL *)(JavaVM **, jsize, jsize *);
 
 bool JniEnvironment::Initialize(const char *threadName) {
     if (attached_) {
+        std::cout << "[JNI] Initialize called while already attached." << std::endl;
         return true;
     }
 
@@ -15,6 +17,8 @@ bool JniEnvironment::Initialize(const char *threadName) {
         std::cout << "[!] ERROR: jvm.dll not found." << std::endl;
         return false;
     }
+    std::cout << "[JNI] jvm.dll handle resolved at 0x" << std::hex << reinterpret_cast<uintptr_t>(hJvmDll)
+              << std::dec << std::endl;
 
     auto getCreatedJavaVMs = reinterpret_cast<GetCreatedJavaVMsFn>(
         GetProcAddress(hJvmDll, "JNI_GetCreatedJavaVMs"));
@@ -22,32 +26,40 @@ bool JniEnvironment::Initialize(const char *threadName) {
         std::cout << "[!] ERROR: Failed to resolve JNI_GetCreatedJavaVMs." << std::endl;
         return false;
     }
+    std::cout << "[JNI] JNI_GetCreatedJavaVMs resolved." << std::endl;
 
     jsize vmCount = 0;
     const jint vmResult = getCreatedJavaVMs(&vm_, 1, &vmCount);
+    std::cout << "[JNI] JNI_GetCreatedJavaVMs returned status=" << vmResult << " vmCount=" << vmCount << std::endl;
     if (vmResult != JNI_OK || vm_ == nullptr) {
         std::cout << "[!] ERROR: JavaVM not found." << std::endl;
         return false;
     }
+    std::cout << "[JNI] Using JavaVM at 0x" << std::hex << reinterpret_cast<uintptr_t>(vm_) << std::dec << std::endl;
 
     JavaVMAttachArgs attachArgs{};
     attachArgs.version = JNI_VERSION_1_8;
     attachArgs.name = const_cast<char *>(threadName);
     attachArgs.group = nullptr;
 
-    if (vm_->AttachCurrentThread(reinterpret_cast<void **>(&env_), &attachArgs) != JNI_OK) {
+    std::cout << "[JNI] Attaching current thread with name '" << threadName << "'." << std::endl;
+    const jint attachStatus = vm_->AttachCurrentThread(reinterpret_cast<void **>(&env_), &attachArgs);
+    if (attachStatus != JNI_OK) {
         env_ = nullptr;
-        std::cout << "[!] ERROR: Failed to attach current thread to JVM." << std::endl;
+        std::cout << "[!] ERROR: Failed to attach current thread to JVM. status=" << attachStatus << std::endl;
         return false;
     }
 
     attached_ = true;
     activeVm_ = vm_;
+    std::cout << "[JNI] Thread attached. JNIEnv=0x" << std::hex << reinterpret_cast<uintptr_t>(env_) << std::dec
+              << std::endl;
     return true;
 }
 
 void JniEnvironment::Shutdown() {
     if (attached_ && vm_ != nullptr) {
+        std::cout << "[JNI] Detaching current thread from JVM." << std::endl;
         vm_->DetachCurrentThread();
     }
 
