@@ -73,7 +73,6 @@ DWORD WINAPI MainThread(LPVOID moduleHandle) {
         if (menuState.sprint) player.Sprint();
         if (menuState.velocity) velocity.anti_knockback();
         if (menuState.triggerBot) entity_hit_result.isEntity();
-        if (menuState.tracer && esp.IsInitialized()) esp.Tick();
         Sleep(20);
     }
     uiHookManager.Shutdown();

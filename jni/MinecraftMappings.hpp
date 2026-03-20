@@ -14,6 +14,9 @@ namespace mc_mappings {
         inline constexpr const char *DeltaTracker = "gez";
         inline constexpr const char *DeltaTrackerTimer = "gez$b";
         inline constexpr const char *DeltaTrackerDefaultValue = "gez$a";
+        inline constexpr const char *GameRenderer = "hob";
+        inline constexpr const char *Camera = "ger";
+        inline constexpr const char *Vec3 = "ftm";
         inline constexpr const char *Options = "gfo";
         inline constexpr const char *OptionInstance = "gfn";
         inline constexpr const char *Entity = "cgk";
@@ -34,13 +37,19 @@ namespace mc_mappings {
         inline constexpr MemberId Level{"r", "Lhif;"};
         inline constexpr MemberId DeltaTracker{"P", "Lgez$b;"};
         inline constexpr MemberId GetDeltaTracker{"aD", "()Lgez;"};
+        inline constexpr MemberId GameRenderer{"i", "Lhob;"};
         inline constexpr MemberId Options{"k", "Lgfo;"};
-        inline constexpr MemberId LocalPlayer{"s", "Lhnh;"};
+        inline constexpr MemberId LocalPlayer{"s", "Lhnh;"};        
         inline constexpr MemberId HitResult{"u", "Lftk;"};
         inline constexpr MemberId GameMode{"q", "Lhio;"};
         inline constexpr MemberId RightClickDelay{"aR", "I"};
         inline constexpr MemberId StartAttack{"bu", "()Z"};
     } // namespace minecraft
+
+    namespace game_renderer {
+        inline constexpr MemberId GetMainCamera{"p", "()Lger;"};
+        inline constexpr MemberId GetFov{"a", "(Lger;FZ)F"};
+    } // namespace game_renderer
 
     namespace client_level {
         inline constexpr MemberId Players{"E", "()Ljava/util/List;"};
@@ -80,10 +89,22 @@ namespace mc_mappings {
         inline constexpr MemberId GetZ{"dV", "()D"};
         inline constexpr MemberId GetYaw{"ec", "()F"};
         inline constexpr MemberId GetPitch{"ee", "()F"};
-        inline constexpr MemberId OldX{"ao", "D"};
-        inline constexpr MemberId OldY{"ap", "D"};
-        inline constexpr MemberId OldZ{"aq", "D"};
+        inline constexpr MemberId OldX{"Y", "D"};
+        inline constexpr MemberId OldY{"Z", "D"};
+        inline constexpr MemberId OldZ{"aa", "D"};
     } // namespace entity
+
+    namespace camera {
+        inline constexpr MemberId GetPosition{"b", "()Lftm;"};
+        inline constexpr MemberId GetYRot{"f", "()F"};
+        inline constexpr MemberId GetXRot{"e", "()F"};
+    } // namespace camera
+
+    namespace vec3 {
+        inline constexpr MemberId X{"g", "D"};
+        inline constexpr MemberId Y{"h", "D"};
+        inline constexpr MemberId Z{"i", "D"};
+    } // namespace vec3
 
     namespace delta_tracker {
         inline constexpr MemberId GetGameTimeDeltaPartialTick{"a", "(Z)F"};

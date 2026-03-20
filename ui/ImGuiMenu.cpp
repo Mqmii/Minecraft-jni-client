@@ -224,6 +224,21 @@ void ImGuiMenu::DrawMenu() {
     ImGui::SameLine();
     DrawTriggerBotHotkeyControl();
     ImGui::Checkbox("Tracer", &state_.tracer);
+    ImGui::Checkbox("Box ESP", &state_.boxEsp);
+
+    if (state_.tracer || state_.boxEsp) {
+        ImGui::Separator();
+    }
+
+    if (state_.tracer) {
+        ImGui::ColorEdit4("Tracer Color", state_.tracerColor, ImGuiColorEditFlags_AlphaBar);
+        ImGui::SliderFloat("Tracer Thickness", &state_.tracerThickness, 0.5f, 6.0f, "%.2f");
+    }
+
+    if (state_.boxEsp) {
+        ImGui::ColorEdit4("Box Color", state_.boxColor, ImGuiColorEditFlags_AlphaBar);
+        ImGui::SliderFloat("Box Thickness", &state_.boxThickness, 0.5f, 6.0f, "%.2f");
+    }
 
     ImGui::End();
 }
@@ -256,8 +271,10 @@ void ImGuiMenu::RenderFrame() {
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
-    if (esp_ != nullptr && state_.tracer) {
-        esp_->RenderOverlay();
+    if (esp_ != nullptr && (state_.tracer || state_.boxEsp)) {
+        esp_->Tick();
+        esp_->RenderOverlay(state_.tracer, state_.boxEsp, state_.tracerColor, state_.tracerThickness,
+                            state_.boxColor, state_.boxThickness);
     }
 
     if (showMenu_) {

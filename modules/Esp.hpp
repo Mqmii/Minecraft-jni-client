@@ -40,6 +40,8 @@ public:
         bool levelValid{false};
         bool playerListValid{false};
         bool cameraValid{false};
+        bool renderCameraAvailable{false};
+        bool renderCameraUsed{false};
         int playerCount{0};
         int targetCount{0};
         double cameraX{};
@@ -55,18 +57,19 @@ public:
     jclass levelClass{};
     jclass listClass{};
     jclass deltaTrackerTimerClass{};
-    jclass optionsClass{};
-    jclass optionInstanceClass{};
-    jclass numberClass{};
+    jclass gameRendererClass{};
+    jclass cameraClass{};
+    jclass vec3Class{};
 
     jfieldID levelField{};
     jfieldID deltaTrackerField{};
-    jfieldID optionsField{};
-    jfieldID fovField{};
-    jfieldID optionValueField{};
+    jfieldID gameRendererField{};
     jfieldID oldXFieldID{};
     jfieldID oldYFieldID{};
     jfieldID oldZFieldID{};
+    jfieldID vec3XFieldID{};
+    jfieldID vec3YFieldID{};
+    jfieldID vec3ZFieldID{};
 
     jmethodID getPlayersMethodID{};
     jmethodID listSizeMethodID{};
@@ -75,22 +78,26 @@ public:
     jmethodID getYMethodID{};
     jmethodID getEyeYMethodID{};
     jmethodID getZMethodID{};
-    jmethodID getYawMethodID{};
-    jmethodID getPitchMethodID{};
     jmethodID getGameTimeDeltaPartialTickMethodID{};
-    jmethodID numberDoubleValueMethodID{};
+    jmethodID getMainCameraMethodID{};
+    jmethodID getCameraPositionMethodID{};
+    jmethodID getCameraYawMethodID{};
+    jmethodID getCameraPitchMethodID{};
+    jmethodID getRenderFovMethodID{};
 
     Esp();
     bool IsInitialized() const;
     void Tick();
-    void RenderOverlay() const;
+    void RenderOverlay(bool drawTracer, bool drawBox, const float *tracerColor, float tracerThickness,
+                       const float *boxColor, float boxThickness) const;
 
 private:
     void SetStatusLocked(const char *status);
     void SetStatus(const char *status);
     bool initialized_{false};
-    double ReadCurrentFov(JNIEnv *env) const;
     float ReadCurrentFrameTime(JNIEnv *env) const;
+    bool TryReadRenderCameraState(JNIEnv *env, CameraState &renderCamera) const;
+    bool HasRenderCameraLookups() const;
 
     mutable std::mutex stateMutex_;
     std::vector<Target> targets_;

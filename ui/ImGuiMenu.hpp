@@ -12,6 +12,11 @@ struct ImGuiMenuState {
     bool velocity = false;
     bool triggerBot = false;
     bool tracer = false;
+    bool boxEsp = false;
+    float tracerColor[4]{1.0f, 0.2745f, 0.2745f, 0.8627f};
+    float boxColor[4]{1.0f, 0.2745f, 0.2745f, 0.8235f};
+    float tracerThickness = 1.5f;
+    float boxThickness = 1.35f;
 };
 
 class ImGuiMenu {
