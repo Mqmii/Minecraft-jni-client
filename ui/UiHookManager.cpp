@@ -32,11 +32,16 @@ bool UiHookManager::Initialize() {
 
     instance_ = this;
     shuttingDown_ = false;
+    renderThreadShutdownComplete_ = false;
     loggedFirstRenderCallback_ = false;
+    loggedRenderThreadShutdownWait_ = false;
+    loggedSingleHookStrategy_ = false;
+    menu_.SetToggleKeyPollingEnabled(true);
 
     const MH_STATUS initStatus = MH_Initialize();
     if (initStatus != MH_OK && initStatus != MH_ERROR_ALREADY_INITIALIZED) {
         std::cout << "[!] ERROR: Failed to initialize MinHook." << std::endl;
+        instance_ = nullptr;
         return false;
     }
     minHookInitialized_ = true;
@@ -65,31 +70,6 @@ bool UiHookManager::Initialize() {
 bool UiHookManager::TryInstallHooks() {
     bool anyHookEnabled = false;
 
-    if (!swapHookInstalled_) {
-        if (swapBuffersTarget_ == nullptr) {
-            if (HMODULE gdiModule = GetModuleHandleW(L"gdi32.dll"); gdiModule != nullptr) {
-                swapBuffersTarget_ = reinterpret_cast<void *>(GetProcAddress(gdiModule, "SwapBuffers"));
-            }
-        }
-
-        if (swapBuffersTarget_ != nullptr) {
-            const MH_STATUS createStatus = MH_CreateHook(
-                swapBuffersTarget_,
-                reinterpret_cast<void *>(&UiHookManager::HookedSwapBuffers),
-                reinterpret_cast<void **>(&originalSwapBuffers_));
-            if (createStatus == MH_OK || createStatus == MH_ERROR_ALREADY_CREATED) {
-                const MH_STATUS enableStatus = MH_EnableHook(swapBuffersTarget_);
-                if (enableStatus == MH_OK || enableStatus == MH_ERROR_ENABLED) {
-                    swapHookInstalled_ = true;
-                    anyHookEnabled = true;
-                    std::cout << "[+] gdi32!SwapBuffers hook installed." << std::endl;
-                }
-            }
-        }
-    } else {
-        anyHookEnabled = true;
-    }
-
     if (!wglHookInstalled_) {
         if (wglSwapBuffersTarget_ == nullptr) {
             if (HMODULE openglModule = GetModuleHandleW(L"opengl32.dll"); openglModule != nullptr) {
@@ -115,32 +95,73 @@ bool UiHookManager::TryInstallHooks() {
         anyHookEnabled = true;
     }
 
+    if (wglHookInstalled_) {
+        if (!loggedSingleHookStrategy_) {
+            std::cout << "[UI] Using wglSwapBuffers as the primary render hook." << std::endl;
+            loggedSingleHookStrategy_ = true;
+        }
+        return true;
+    }
+
+    if (!swapHookInstalled_) {
+        if (swapBuffersTarget_ == nullptr) {
+            if (HMODULE gdiModule = GetModuleHandleW(L"gdi32.dll"); gdiModule != nullptr) {
+                swapBuffersTarget_ = reinterpret_cast<void *>(GetProcAddress(gdiModule, "SwapBuffers"));
+            }
+        }
+
+        if (swapBuffersTarget_ != nullptr) {
+            const MH_STATUS createStatus = MH_CreateHook(
+                swapBuffersTarget_,
+                reinterpret_cast<void *>(&UiHookManager::HookedSwapBuffers),
+                reinterpret_cast<void **>(&originalSwapBuffers_));
+            if (createStatus == MH_OK || createStatus == MH_ERROR_ALREADY_CREATED) {
+                const MH_STATUS enableStatus = MH_EnableHook(swapBuffersTarget_);
+                if (enableStatus == MH_OK || enableStatus == MH_ERROR_ENABLED) {
+                    swapHookInstalled_ = true;
+                    anyHookEnabled = true;
+                    std::cout << "[UI] Falling back to gdi32!SwapBuffers hook." << std::endl;
+                }
+            }
+        }
+    } else {
+        anyHookEnabled = true;
+    }
+
     return anyHookEnabled;
 }
 
 void UiHookManager::Shutdown() {
     std::cout << "[UI] Shutdown requested." << std::endl;
     shuttingDown_ = true;
+    menu_.SetRunning(false);
+
+    const bool renderThreadShutdownCompleted = WaitForRenderThreadShutdown();
+    if (!renderThreadShutdownCompleted && menu_.IsInitialized()) {
+        std::cout << "[!] WARNING: Render-thread shutdown did not complete before unload." << std::endl;
+    }
 
     if (minHookInitialized_) {
         if (swapHookInstalled_ && swapBuffersTarget_ != nullptr) {
             MH_DisableHook(swapBuffersTarget_);
-            MH_RemoveHook(swapBuffersTarget_);
-            swapHookInstalled_ = false;
         }
         if (wglHookInstalled_ && wglSwapBuffersTarget_ != nullptr) {
             MH_DisableHook(wglSwapBuffersTarget_);
-            MH_RemoveHook(wglSwapBuffersTarget_);
-            wglHookInstalled_ = false;
         }
     }
 
     DetachWndProc();
     WaitForCallbacksToDrain();
 
-    if (menu_.IsInitialized()) {
-        const bool canShutdownRenderer = renderContext_ != nullptr && wglGetCurrentContext() == renderContext_;
-        menu_.Shutdown(canShutdownRenderer);
+    if (minHookInitialized_) {
+        if (swapHookInstalled_ && swapBuffersTarget_ != nullptr) {
+            MH_RemoveHook(swapBuffersTarget_);
+            swapHookInstalled_ = false;
+        }
+        if (wglHookInstalled_ && wglSwapBuffersTarget_ != nullptr) {
+            MH_RemoveHook(wglSwapBuffersTarget_);
+            wglHookInstalled_ = false;
+        }
     }
 
     if (minHookInitialized_) {
@@ -164,15 +185,12 @@ void UiHookManager::Shutdown() {
 }
 
 void UiHookManager::SetEsp(Esp *esp) {
+    std::scoped_lock renderLock(renderMutex_);
     menu_.SetEsp(esp);
 }
 
-ImGuiMenuState &UiHookManager::State() {
-    return menu_.State();
-}
-
-const ImGuiMenuState &UiHookManager::State() const {
-    return menu_.State();
+ImGuiMenuState UiHookManager::GetStateSnapshot() const {
+    return menu_.GetStateSnapshot();
 }
 
 bool UiHookManager::AttachToWindow(HWND hWnd) {
@@ -183,11 +201,6 @@ bool UiHookManager::AttachToWindow(HWND hWnd) {
     if (window_ != hWnd) {
         std::cout << "[UI] Binding to window 0x" << std::hex << reinterpret_cast<uintptr_t>(hWnd) << std::dec
                   << std::endl;
-        if (menu_.IsInitialized()) {
-            const bool canShutdownRenderer = renderContext_ != nullptr && wglGetCurrentContext() == renderContext_;
-            menu_.Shutdown(canShutdownRenderer);
-        }
-        renderContext_ = nullptr;
         DetachWndProc();
         window_ = hWnd;
     }
@@ -214,6 +227,7 @@ bool UiHookManager::AttachToWindow(HWND hWnd) {
     originalWndProc_ = currentWndProc != nullptr ? currentWndProc : previousWndProc;
     wndProcHooked_ = originalWndProc_ != nullptr;
     if (wndProcHooked_) {
+        menu_.SetToggleKeyPollingEnabled(false);
         std::cout << "[UI] WndProc hook active for window 0x" << std::hex << reinterpret_cast<uintptr_t>(window_)
                   << std::dec << std::endl;
     }
@@ -222,11 +236,18 @@ bool UiHookManager::AttachToWindow(HWND hWnd) {
 
 void UiHookManager::DetachWndProc() {
     if (wndProcHooked_ && window_ != nullptr && originalWndProc_ != nullptr) {
-        SetWindowLongPtr(window_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(originalWndProc_));
+        SetLastError(0);
+        auto currentWndProc = reinterpret_cast<WndProcFn>(GetWindowLongPtr(window_, GWLP_WNDPROC));
+        if (currentWndProc == reinterpret_cast<WndProcFn>(&UiHookManager::HookedWndProc)) {
+            SetWindowLongPtr(window_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(originalWndProc_));
+        } else if (currentWndProc != originalWndProc_) {
+            std::cout << "[!] WARNING: Skipping WndProc restore because the chain changed." << std::endl;
+        }
     }
 
     wndProcHooked_ = false;
     originalWndProc_ = nullptr;
+    menu_.SetToggleKeyPollingEnabled(true);
 }
 
 bool UiHookManager::IsValidGameWindow(HWND hWnd) const {
@@ -297,6 +318,79 @@ void UiHookManager::ResetObservedRenderTarget() {
     observedRenderTargetHits_ = 0;
 }
 
+bool UiHookManager::PerformRenderThreadShutdown(HGLRC currentContext) {
+    if (renderThreadShutdownComplete_.load(std::memory_order_acquire)) {
+        return true;
+    }
+
+    if (!menu_.IsInitialized()) {
+        renderContext_ = nullptr;
+        ResetObservedRenderTarget();
+        renderThreadShutdownComplete_.store(true, std::memory_order_release);
+        return true;
+    }
+
+    if (renderContext_ != nullptr && currentContext != renderContext_) {
+        std::cout << "[UI] Shutdown observed context mismatch. Abandoning stale renderer context 0x" << std::hex
+                  << reinterpret_cast<uintptr_t>(renderContext_) << " from current 0x"
+                  << reinterpret_cast<uintptr_t>(currentContext) << std::dec << std::endl;
+        menu_.AbandonRendererState(true);
+        renderContext_ = nullptr;
+        ResetObservedRenderTarget();
+        renderThreadShutdownComplete_.store(true, std::memory_order_release);
+        return true;
+    }
+
+    loggedRenderThreadShutdownWait_ = false;
+    std::cout << "[UI] Performing render-thread shutdown on thread " << GetCurrentThreadId() << " window=0x"
+              << std::hex << reinterpret_cast<uintptr_t>(window_) << " context=0x"
+              << reinterpret_cast<uintptr_t>(currentContext) << std::dec << std::endl;
+    menu_.ShutdownForCurrentContext(currentContext, true);
+    renderContext_ = nullptr;
+    ResetObservedRenderTarget();
+    renderThreadShutdownComplete_.store(true, std::memory_order_release);
+    std::cout << "[UI] Render-thread shutdown complete." << std::endl;
+    return true;
+}
+
+void UiHookManager::ResetBoundRenderer(bool resetMenuVisibility) {
+    if (!menu_.IsInitialized()) {
+        renderContext_ = nullptr;
+        ResetObservedRenderTarget();
+        return;
+    }
+
+    const HGLRC currentContext = wglGetCurrentContext();
+    if (renderContext_ != nullptr && currentContext == renderContext_) {
+        menu_.ShutdownForCurrentContext(currentContext, resetMenuVisibility);
+    } else {
+        std::cout << "[UI] Rebinding renderer from stale context 0x" << std::hex
+                  << reinterpret_cast<uintptr_t>(renderContext_) << " to 0x"
+                  << reinterpret_cast<uintptr_t>(currentContext) << std::dec << std::endl;
+        menu_.AbandonRendererState(resetMenuVisibility);
+    }
+
+    renderContext_ = nullptr;
+    ResetObservedRenderTarget();
+}
+
+bool UiHookManager::WaitForRenderThreadShutdown() {
+    if (!menu_.IsInitialized()) {
+        renderThreadShutdownComplete_.store(true, std::memory_order_release);
+        return true;
+    }
+
+    constexpr int kMaxWaitIterations = 500;
+    for (int attempt = 0; attempt < kMaxWaitIterations; ++attempt) {
+        if (renderThreadShutdownComplete_.load(std::memory_order_acquire)) {
+            return true;
+        }
+        Sleep(10);
+    }
+
+    return false;
+}
+
 void UiHookManager::WaitForCallbacksToDrain() const {
     constexpr int kMaxWaitIterations = 200;
     for (int attempt = 0; attempt < kMaxWaitIterations; ++attempt) {
@@ -310,16 +404,12 @@ void UiHookManager::WaitForCallbacksToDrain() const {
     std::cout << "[!] WARNING: Timed out waiting for UI callbacks to drain." << std::endl;
 }
 
-BOOL UiHookManager::RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn) {
+BOOL UiHookManager::RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn, const char *hookName) {
     if (originalFn == nullptr) {
         return FALSE;
     }
 
     CallbackScope callbackScope(activeSwapCalls_);
-
-    if (shuttingDown_) {
-        return originalFn(hDc);
-    }
 
     if (inSwapHook_) {
         return originalFn(hDc);
@@ -333,7 +423,7 @@ BOOL UiHookManager::RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn)
     std::scoped_lock renderLock(renderMutex_);
 
     if (!loggedFirstRenderCallback_) {
-        std::cout << "[UI] Render callback entered for the first time." << std::endl;
+        std::cout << "[UI] Render callback entered for the first time via " << hookName << "." << std::endl;
         loggedFirstRenderCallback_ = true;
     }
 
@@ -347,6 +437,11 @@ BOOL UiHookManager::RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn)
     }
     loggedMissingContext_ = false;
 
+    if (shuttingDown_) {
+        PerformRenderThreadShutdown(currentContext);
+        return originalFn(hDc);
+    }
+
     if (HWND candidateWindow = ResolveGameWindow(hDc); candidateWindow != nullptr) {
         const bool isBoundRenderTarget = window_ == candidateWindow && renderContext_ == currentContext;
         if (!isBoundRenderTarget) {
@@ -354,13 +449,12 @@ BOOL UiHookManager::RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn)
                 return originalFn(hDc);
             }
 
-            if (!AttachToWindow(candidateWindow)) {
-                return originalFn(hDc);
+            if (menu_.IsInitialized()) {
+                ResetBoundRenderer(false);
             }
 
-            if (menu_.IsInitialized()) {
-                const bool canShutdownRenderer = renderContext_ != nullptr && wglGetCurrentContext() == renderContext_;
-                menu_.Shutdown(canShutdownRenderer);
+            if (!AttachToWindow(candidateWindow)) {
+                return originalFn(hDc);
             }
 
             renderContext_ = currentContext;
@@ -369,7 +463,7 @@ BOOL UiHookManager::RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn)
 
         if (window_ == candidateWindow && renderContext_ == currentContext) {
             if (!menu_.IsInitialized()) {
-                if (!menu_.Initialize(window_)) {
+                if (!menu_.Initialize(window_, renderContext_)) {
                     std::cout << "[!] ERROR: Failed to initialize ImGui." << std::endl;
                     return originalFn(hDc);
                 }
@@ -389,14 +483,14 @@ BOOL WINAPI UiHookManager::HookedSwapBuffers(HDC hDc) {
     if (instance_ == nullptr) {
         return FALSE;
     }
-    return instance_->RenderMenuAndCallOriginal(hDc, instance_->originalSwapBuffers_);
+    return instance_->RenderMenuAndCallOriginal(hDc, instance_->originalSwapBuffers_, "gdi32!SwapBuffers");
 }
 
 BOOL WINAPI UiHookManager::HookedWglSwapBuffers(HDC hDc) {
     if (instance_ == nullptr) {
         return FALSE;
     }
-    return instance_->RenderMenuAndCallOriginal(hDc, instance_->originalWglSwapBuffers_);
+    return instance_->RenderMenuAndCallOriginal(hDc, instance_->originalWglSwapBuffers_, "opengl32!wglSwapBuffers");
 }
 
 LRESULT CALLBACK UiHookManager::HookedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {

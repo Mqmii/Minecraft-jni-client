@@ -1,9 +1,11 @@
 #include "Esp.hpp"
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <iostream>
+#include <windows.h>
 
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
@@ -18,251 +20,270 @@
 #include "../jni/MinecraftMappings.hpp"
 
 namespace {
-bool ClearPendingJniException(JNIEnv *env, const char *context) {
-    if (env == nullptr || !env->ExceptionCheck()) {
-        return false;
-    }
+    constexpr uint64_t kNameRefreshIntervalMs = 15000;
+    constexpr uint64_t kNameCacheExpiryMs = 15000;
 
-    std::cout << "[ESP] JNI lookup/call failed at " << context << ". ESP disabled for this session." << std::endl;
-    env->ExceptionClear();
-    return true;
-}
-
-bool IsFinite(double value) {
-    return std::isfinite(value) != 0;
-}
-
-ImU32 ColorFromArray(const float *color, ImU32 fallback) {
-    if (color == nullptr) {
-        return fallback;
-    }
-
-    return ImGui::ColorConvertFloat4ToU32(ImVec4(
-        std::clamp(color[0], 0.0f, 1.0f),
-        std::clamp(color[1], 0.0f, 1.0f),
-        std::clamp(color[2], 0.0f, 1.0f),
-        std::clamp(color[3], 0.0f, 1.0f)));
-}
-
-void AppendLookupFailure(std::string &failures, const std::string &entry) {
-    std::cout << "[ESP] Missing lookup: " << entry << std::endl;
-    if (!failures.empty()) {
-        failures += " | ";
-    }
-    failures += entry;
-}
-
-void AppendClassFailure(std::string &failures, const char *label, const char *className) {
-    AppendLookupFailure(failures, std::string("class ") + label + " -> " + className);
-}
-
-void AppendMemberFailure(std::string &failures, const char *kind, const char *ownerLabel, const char *name,
-                         const char *signature) {
-    AppendLookupFailure(failures, std::string(kind) + " " + ownerLabel + "." + name + " " + signature);
-}
-
-void SetLookupDebugState(Esp::DebugState &debugState, const char *status, const std::string &lookupDetails) {
-    debugState.lastStatus = status != nullptr ? status : "";
-    debugState.lookupDetails = lookupDetails;
-}
-
-double Lerp(double start, double end, float alpha) {
-    return start + (end - start) * static_cast<double>(alpha);
-}
-
-struct Vec3 {
-    double x{};
-    double y{};
-    double z{};
-};
-
-Vec3 operator-(const Vec3 &lhs, const Vec3 &rhs) {
-    return {lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z};
-}
-
-double NormalizeDegrees(double degrees) {
-    double normalized = std::fmod(degrees, 360.0);
-    if (normalized > 180.0) {
-        normalized -= 360.0;
-    } else if (normalized < -180.0) {
-        normalized += 360.0;
-    }
-    return normalized;
-}
-
-bool ProjectToNdc(const Vec3 &worldPosition, const Esp::CameraState &cameraState, float screenWidth, float screenHeight,
-                  double &normalizedX, double &normalizedY, bool &inFront) {
-    if (!cameraState.valid || screenWidth <= 0.0f || screenHeight <= 0.0f) {
-        return false;
-    }
-
-    if (!IsFinite(worldPosition.x) || !IsFinite(worldPosition.y) || !IsFinite(worldPosition.z) ||
-        !IsFinite(cameraState.x) || !IsFinite(cameraState.y) || !IsFinite(cameraState.z) ||
-        !IsFinite(cameraState.yawDegrees) || !IsFinite(cameraState.pitchDegrees) || !IsFinite(cameraState.fovDegrees)) {
-        return false;
-    }
-
-    const float aspectRatio = screenWidth / screenHeight;
-    const float clampedFov = std::clamp(static_cast<float>(cameraState.fovDegrees), 30.0f, 170.0f);
-    const float yawRadians = glm::radians(static_cast<float>(NormalizeDegrees(cameraState.yawDegrees)));
-    const float pitchRadians = glm::radians(static_cast<float>(NormalizeDegrees(-cameraState.pitchDegrees)));
-
-    glm::vec3 eye(static_cast<float>(cameraState.x), static_cast<float>(cameraState.y), static_cast<float>(cameraState.z));
-    glm::vec3 forward(
-        -std::sin(yawRadians) * std::cos(pitchRadians),
-        std::sin(pitchRadians),
-        std::cos(yawRadians) * std::cos(pitchRadians));
-    if (!std::isfinite(forward.x) || !std::isfinite(forward.y) || !std::isfinite(forward.z) ||
-        glm::length(forward) <= 0.0001f) {
-        return false;
-    }
-
-    const glm::vec3 up(0.0f, 1.0f, 0.0f);
-    const glm::mat4 view = glm::lookAtRH(eye, eye + glm::normalize(forward), up);
-    const glm::mat4 projection = glm::perspectiveRH_NO(glm::radians(clampedFov), aspectRatio, 0.05f, 4096.0f);
-    const glm::vec4 clip = projection * view * glm::vec4(
-        static_cast<float>(worldPosition.x),
-        static_cast<float>(worldPosition.y),
-        static_cast<float>(worldPosition.z),
-        1.0f);
-
-    if (!std::isfinite(clip.x) || !std::isfinite(clip.y) || !std::isfinite(clip.z) || !std::isfinite(clip.w) ||
-        std::abs(clip.w) <= 0.0001f) {
-        return false;
-    }
-
-    inFront = clip.w > 0.0f;
-    const float inverseW = 1.0f / std::abs(clip.w);
-    normalizedX = static_cast<double>((inFront ? clip.x : -clip.x) * inverseW);
-    normalizedY = static_cast<double>((inFront ? clip.y : -clip.y) * inverseW);
-    return IsFinite(normalizedX) && IsFinite(normalizedY);
-}
-
-bool ComputeOffscreenIndicatorNormalized(const Vec3 &worldPosition, const Esp::CameraState &cameraState, float screenWidth,
-                                         float screenHeight, double &normalizedX, double &normalizedY) {
-    if (!cameraState.valid || screenWidth <= 0.0f || screenHeight <= 0.0f) {
-        return false;
-    }
-
-    if (!IsFinite(worldPosition.x) || !IsFinite(worldPosition.y) || !IsFinite(worldPosition.z) ||
-        !IsFinite(cameraState.x) || !IsFinite(cameraState.y) || !IsFinite(cameraState.z) ||
-        !IsFinite(cameraState.yawDegrees) || !IsFinite(cameraState.pitchDegrees) || !IsFinite(cameraState.fovDegrees)) {
-        return false;
-    }
-
-    const float aspectRatio = screenWidth / screenHeight;
-    const float yawRadians = glm::radians(static_cast<float>(NormalizeDegrees(cameraState.yawDegrees)));
-    const float pitchRadians = glm::radians(static_cast<float>(NormalizeDegrees(-cameraState.pitchDegrees)));
-    glm::vec3 eye(static_cast<float>(cameraState.x), static_cast<float>(cameraState.y), static_cast<float>(cameraState.z));
-    glm::vec3 forward(
-        -std::sin(yawRadians) * std::cos(pitchRadians),
-        std::sin(pitchRadians),
-        std::cos(yawRadians) * std::cos(pitchRadians));
-    if (!std::isfinite(forward.x) || !std::isfinite(forward.y) || !std::isfinite(forward.z) ||
-        glm::length(forward) <= 0.0001f) {
-        return false;
-    }
-
-    const glm::mat4 view = glm::lookAtRH(eye, eye + glm::normalize(forward), glm::vec3(0.0f, 1.0f, 0.0f));
-    const glm::vec4 viewSpace = view * glm::vec4(
-        static_cast<float>(worldPosition.x),
-        static_cast<float>(worldPosition.y),
-        static_cast<float>(worldPosition.z),
-        1.0f);
-    if (!std::isfinite(viewSpace.x) || !std::isfinite(viewSpace.y) || !std::isfinite(viewSpace.z)) {
-        return false;
-    }
-
-    double directionX = static_cast<double>(viewSpace.x) / static_cast<double>(aspectRatio);
-    double directionY = static_cast<double>(viewSpace.y);
-    if (viewSpace.z >= 0.0f) {
-        directionY = -directionY;
-    }
-
-    if (std::abs(directionX) <= 0.000001 && std::abs(directionY) <= 0.000001) {
-        directionY = -1.0;
-    }
-
-    const double scale = 1.0 / std::max(std::abs(directionX), std::abs(directionY));
-    normalizedX = directionX * scale;
-    normalizedY = directionY * scale;
-    return IsFinite(normalizedX) && IsFinite(normalizedY);
-}
-
-bool WorldToScreen(const Vec3 &worldPosition, const Esp::CameraState &cameraState, float screenWidth, float screenHeight,
-                   ImVec2 &screenPosition, bool clampOffscreen = true) {
-    double normalizedX{};
-    double normalizedY{};
-    bool inFront = false;
-    if (!ProjectToNdc(worldPosition, cameraState, screenWidth, screenHeight, normalizedX, normalizedY, inFront)) {
-        return false;
-    }
-
-    if (!clampOffscreen && !inFront) {
-        return false;
-    }
-
-    const bool onScreen = inFront && std::abs(normalizedX) <= 1.0 && std::abs(normalizedY) <= 1.0;
-    if (clampOffscreen && !onScreen) {
-        if (!inFront &&
-            !ComputeOffscreenIndicatorNormalized(worldPosition, cameraState, screenWidth, screenHeight, normalizedX,
-                                                 normalizedY)) {
+    bool ClearPendingJniException(JNIEnv *env, const char *context) {
+        if (env == nullptr || !env->ExceptionCheck()) {
             return false;
         }
+
+        std::cout << "[ESP] JNI lookup/call failed at " << context << ". ESP disabled for this session." << std::endl;
+        env->ExceptionClear();
+        return true;
     }
 
-    const double absX = std::abs(normalizedX);
-    const double absY = std::abs(normalizedY);
-    double clampedX = normalizedX;
-    double clampedY = normalizedY;
-
-    if (!clampOffscreen && (absX > 1.0 || absY > 1.0)) {
-        return false;
+    bool IsFinite(double value) {
+        return std::isfinite(value) != 0;
     }
 
-    const bool offscreenIndicator = clampOffscreen && !onScreen;
-
-    // Keep off-screen targets visible by projecting them onto the nearest screen edge.
-    if (offscreenIndicator && (absX > 1.0 || absY > 1.0)) {
-        const double scale = 1.0 / std::max(absX, absY);
-        clampedX *= scale;
-        clampedY *= scale;
-    }
-
-    if (offscreenIndicator) {
-        const double trueHeightDelta = worldPosition.y - cameraState.y;
-        const bool verticalPriority = std::abs(trueHeightDelta) >= 2.0;
-
-        if (verticalPriority) {
-            const double verticalSign = trueHeightDelta >= 0.0 ? 1.0 : -1.0;
-            double horizontalSpread = clampedX * 2.4;
-            if (std::abs(horizontalSpread) < 0.12 && std::abs(clampedX) > 0.02) {
-                horizontalSpread = std::copysign(0.12, clampedX);
-            }
-            clampedX = std::clamp(horizontalSpread, -0.78, 0.78);
-            clampedY = verticalSign;
-        } else {
-            const double horizontalStrength = std::abs(clampedX);
-            const double sideSign = clampedX >= 0.0 ? 1.0 : -1.0;
-            const double sideBiasSource = std::max(horizontalStrength, 0.0001);
-            clampedY = std::clamp(clampedY / sideBiasSource, -0.72, 0.72);
-            clampedX = sideSign;
+    ImU32 ColorFromArray(const float *color, ImU32 fallback) {
+        if (color == nullptr) {
+            return fallback;
         }
+
+        return ImGui::ColorConvertFloat4ToU32(ImVec4(
+            std::clamp(color[0], 0.0f, 1.0f),
+            std::clamp(color[1], 0.0f, 1.0f),
+            std::clamp(color[2], 0.0f, 1.0f),
+            std::clamp(color[3], 0.0f, 1.0f)));
     }
 
-    const float screenPadding = 18.0f;
-    screenPosition.x = static_cast<float>((clampedX + 1.0) * 0.5 * screenWidth);
-    screenPosition.y = static_cast<float>((1.0 - clampedY) * 0.5 * screenHeight);
-    screenPosition.x = std::clamp(screenPosition.x, screenPadding, screenWidth - screenPadding);
-    screenPosition.y = std::clamp(screenPosition.y, screenPadding, screenHeight - screenPadding);
-    return true;
-}
+    void AppendLookupFailure(std::string &failures, const std::string &entry) {
+        std::cout << "[ESP] Missing lookup: " << entry << std::endl;
+        if (!failures.empty()) {
+            failures += " | ";
+        }
+        failures += entry;
+    }
 
-bool WorldToScreenNormalized(const Vec3 &worldPosition, const Esp::CameraState &cameraState, float screenWidth,
-                             float screenHeight, double &normalizedX, double &normalizedY) {
-    bool inFront = false;
-    return ProjectToNdc(worldPosition, cameraState, screenWidth, screenHeight, normalizedX, normalizedY, inFront) && inFront;
-}
+    void AppendClassFailure(std::string &failures, const char *label, const char *className) {
+        AppendLookupFailure(failures, std::string("class ") + label + " -> " + className);
+    }
+
+    void AppendMemberFailure(std::string &failures, const char *kind, const char *ownerLabel, const char *name,
+                             const char *signature) {
+        AppendLookupFailure(failures, std::string(kind) + " " + ownerLabel + "." + name + " " + signature);
+    }
+
+    void SetLookupDebugState(Esp::DebugState &debugState, const char *status, const std::string &lookupDetails) {
+        debugState.lastStatus = status != nullptr ? status : "";
+        debugState.lookupDetails = lookupDetails;
+    }
+
+    double Lerp(double start, double end, float alpha) {
+        return start + (end - start) * static_cast<double>(alpha);
+    }
+
+    struct Vec3 {
+        double x{};
+        double y{};
+        double z{};
+    };
+
+    Vec3 operator-(const Vec3 &lhs, const Vec3 &rhs) {
+        return {lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z};
+    }
+
+    double NormalizeDegrees(double degrees) {
+        double normalized = std::fmod(degrees, 360.0);
+        if (normalized > 180.0) {
+            normalized -= 360.0;
+        } else if (normalized < -180.0) {
+            normalized += 360.0;
+        }
+        return normalized;
+    }
+
+    bool ProjectToNdc(const Vec3 &worldPosition, const Esp::CameraState &cameraState, float screenWidth,
+                      float screenHeight,
+                      double &normalizedX, double &normalizedY, bool &inFront) {
+        if (!cameraState.valid || screenWidth <= 0.0f || screenHeight <= 0.0f) {
+            return false;
+        }
+
+        if (!IsFinite(worldPosition.x) || !IsFinite(worldPosition.y) || !IsFinite(worldPosition.z) ||
+            !IsFinite(cameraState.x) || !IsFinite(cameraState.y) || !IsFinite(cameraState.z) ||
+            !IsFinite(cameraState.yawDegrees) || !IsFinite(cameraState.pitchDegrees) || !IsFinite(
+                cameraState.fovDegrees)) {
+            return false;
+        }
+
+        const float aspectRatio = screenWidth / screenHeight;
+        const float clampedFov = std::clamp(static_cast<float>(cameraState.fovDegrees), 30.0f, 170.0f);
+        const float yawRadians = glm::radians(static_cast<float>(NormalizeDegrees(cameraState.yawDegrees)));
+        const float pitchRadians = glm::radians(static_cast<float>(NormalizeDegrees(-cameraState.pitchDegrees)));
+
+        glm::vec3 eye(static_cast<float>(cameraState.x), static_cast<float>(cameraState.y),
+                      static_cast<float>(cameraState.z));
+        glm::vec3 forward(
+            -std::sin(yawRadians) * std::cos(pitchRadians),
+            std::sin(pitchRadians),
+            std::cos(yawRadians) * std::cos(pitchRadians));
+        if (!std::isfinite(forward.x) || !std::isfinite(forward.y) || !std::isfinite(forward.z) ||
+            glm::length(forward) <= 0.0001f) {
+            return false;
+        }
+
+        const glm::vec3 up(0.0f, 1.0f, 0.0f);
+        const glm::mat4 view = glm::lookAtRH(eye, eye + glm::normalize(forward), up);
+        const glm::mat4 projection = glm::perspectiveRH_NO(glm::radians(clampedFov), aspectRatio, 0.05f, 4096.0f);
+        const glm::vec4 clip = projection * view * glm::vec4(
+                                   static_cast<float>(worldPosition.x),
+                                   static_cast<float>(worldPosition.y),
+                                   static_cast<float>(worldPosition.z),
+                                   1.0f);
+
+        if (!std::isfinite(clip.x) || !std::isfinite(clip.y) || !std::isfinite(clip.z) || !std::isfinite(clip.w) ||
+            std::abs(clip.w) <= 0.0001f) {
+            return false;
+        }
+
+        inFront = clip.w > 0.0f;
+        const float inverseW = 1.0f / std::abs(clip.w);
+        normalizedX = static_cast<double>((inFront ? clip.x : -clip.x) * inverseW);
+        normalizedY = static_cast<double>((inFront ? clip.y : -clip.y) * inverseW);
+        return IsFinite(normalizedX) && IsFinite(normalizedY);
+    }
+
+    bool ComputeOffscreenIndicatorNormalized(const Vec3 &worldPosition, const Esp::CameraState &cameraState,
+                                             float screenWidth,
+                                             float screenHeight, double &normalizedX, double &normalizedY) {
+        if (!cameraState.valid || screenWidth <= 0.0f || screenHeight <= 0.0f) {
+            return false;
+        }
+
+        if (!IsFinite(worldPosition.x) || !IsFinite(worldPosition.y) || !IsFinite(worldPosition.z) ||
+            !IsFinite(cameraState.x) || !IsFinite(cameraState.y) || !IsFinite(cameraState.z) ||
+            !IsFinite(cameraState.yawDegrees) || !IsFinite(cameraState.pitchDegrees) || !IsFinite(
+                cameraState.fovDegrees)) {
+            return false;
+        }
+
+        const float aspectRatio = screenWidth / screenHeight;
+        const float yawRadians = glm::radians(static_cast<float>(NormalizeDegrees(cameraState.yawDegrees)));
+        const float pitchRadians = glm::radians(static_cast<float>(NormalizeDegrees(-cameraState.pitchDegrees)));
+        glm::vec3 eye(static_cast<float>(cameraState.x), static_cast<float>(cameraState.y),
+                      static_cast<float>(cameraState.z));
+        glm::vec3 forward(
+            -std::sin(yawRadians) * std::cos(pitchRadians),
+            std::sin(pitchRadians),
+            std::cos(yawRadians) * std::cos(pitchRadians));
+        if (!std::isfinite(forward.x) || !std::isfinite(forward.y) || !std::isfinite(forward.z) ||
+            glm::length(forward) <= 0.0001f) {
+            return false;
+        }
+
+        const glm::mat4 view = glm::lookAtRH(eye, eye + glm::normalize(forward), glm::vec3(0.0f, 1.0f, 0.0f));
+        const glm::vec4 viewSpace = view * glm::vec4(
+                                        static_cast<float>(worldPosition.x),
+                                        static_cast<float>(worldPosition.y),
+                                        static_cast<float>(worldPosition.z),
+                                        1.0f);
+        if (!std::isfinite(viewSpace.x) || !std::isfinite(viewSpace.y) || !std::isfinite(viewSpace.z)) {
+            return false;
+        }
+
+        double directionX = static_cast<double>(viewSpace.x) / static_cast<double>(aspectRatio);
+        double directionY = static_cast<double>(viewSpace.y);
+        if (viewSpace.z >= 0.0f) {
+            directionY = -directionY;
+        }
+
+        if (std::abs(directionX) <= 0.000001 && std::abs(directionY) <= 0.000001) {
+            directionY = -1.0;
+        }
+
+        const double scale = 1.0 / std::max(std::abs(directionX), std::abs(directionY));
+        normalizedX = directionX * scale;
+        normalizedY = directionY * scale;
+        return IsFinite(normalizedX) && IsFinite(normalizedY);
+    }
+
+    bool WorldToScreen(const Vec3 &worldPosition, const Esp::CameraState &cameraState, float screenWidth,
+                       float screenHeight,
+                       ImVec2 &screenPosition, bool clampOffscreen = true) {
+        double normalizedX{};
+        double normalizedY{};
+        bool inFront = false;
+        if (!ProjectToNdc(worldPosition, cameraState, screenWidth, screenHeight, normalizedX, normalizedY, inFront)) {
+            return false;
+        }
+
+        if (!clampOffscreen && !inFront) {
+            return false;
+        }
+
+        const bool onScreen = inFront && std::abs(normalizedX) <= 1.0 && std::abs(normalizedY) <= 1.0;
+        if (clampOffscreen && !onScreen) {
+            if (!inFront &&
+                !ComputeOffscreenIndicatorNormalized(worldPosition, cameraState, screenWidth, screenHeight, normalizedX,
+                                                     normalizedY)) {
+                return false;
+            }
+        }
+
+        const double absX = std::abs(normalizedX);
+        const double absY = std::abs(normalizedY);
+        double clampedX = normalizedX;
+        double clampedY = normalizedY;
+
+        if (!clampOffscreen && (absX > 1.0 || absY > 1.0)) {
+            return false;
+        }
+
+        const bool offscreenIndicator = clampOffscreen && !onScreen;
+
+        // Keep off-screen targets visible by projecting them onto the nearest screen edge.
+        if (offscreenIndicator && (absX > 1.0 || absY > 1.0)) {
+            const double scale = 1.0 / std::max(absX, absY);
+            clampedX *= scale;
+            clampedY *= scale;
+        }
+
+        if (offscreenIndicator) {
+            const double trueHeightDelta = worldPosition.y - cameraState.y;
+            const bool verticalPriority = std::abs(trueHeightDelta) >= 2.0;
+
+            if (verticalPriority) {
+                const double verticalSign = trueHeightDelta >= 0.0 ? 1.0 : -1.0;
+                double horizontalSpread = clampedX * 2.4;
+                if (std::abs(horizontalSpread) < 0.12 && std::abs(clampedX) > 0.02) {
+                    horizontalSpread = std::copysign(0.12, clampedX);
+                }
+                clampedX = std::clamp(horizontalSpread, -0.78, 0.78);
+                clampedY = verticalSign;
+            } else {
+                const double horizontalStrength = std::abs(clampedX);
+                const double sideSign = clampedX >= 0.0 ? 1.0 : -1.0;
+                const double sideBiasSource = std::max(horizontalStrength, 0.0001);
+                clampedY = std::clamp(clampedY / sideBiasSource, -0.72, 0.72);
+                clampedX = sideSign;
+            }
+        }
+
+        const float screenPadding = 18.0f;
+        screenPosition.x = static_cast<float>((clampedX + 1.0) * 0.5 * screenWidth);
+        screenPosition.y = static_cast<float>((1.0 - clampedY) * 0.5 * screenHeight);
+        screenPosition.x = std::clamp(screenPosition.x, screenPadding, screenWidth - screenPadding);
+        screenPosition.y = std::clamp(screenPosition.y, screenPadding, screenHeight - screenPadding);
+        return true;
+    }
+
+    bool WorldToScreenNormalized(const Vec3 &worldPosition, const Esp::CameraState &cameraState, float screenWidth,
+                                 float screenHeight, double &normalizedX, double &normalizedY) {
+        bool inFront = false;
+        return ProjectToNdc(worldPosition, cameraState, screenWidth, screenHeight, normalizedX, normalizedY,
+                            inFront) && inFront;
+    }
+
+    ImVec2 MeasureText(ImFont *font, float fontSize, const char *text) {
+        if (font == nullptr || text == nullptr || text[0] == '\0') {
+            return ImVec2(0.0f, 0.0f);
+        }
+
+        return font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text);
+    }
 } // namespace
 
 Esp::Esp() {
@@ -370,6 +391,18 @@ Esp::Esp() {
         getHealthMethodID = env->GetMethodID(playerClass, mc_mappings::player::GetHealth.name,
                                              mc_mappings::player::GetHealth.signature);
     }
+    getEntityIdMethodID = env->GetMethodID(Entity::clsEntity, mc_mappings::entity::GetId.name,
+                                           mc_mappings::entity::GetId.signature);
+    getNameMethodID = env->GetMethodID(Entity::clsEntity, mc_mappings::entity::GetName.name,
+                                       mc_mappings::entity::GetName.signature);
+    jclass localComponentClass = env->FindClass(mc_mappings::classes::Component);
+    if (localComponentClass != nullptr) {
+        getStringMethodID = env->GetMethodID(localComponentClass, mc_mappings::component::GetString.name,
+                                             mc_mappings::component::GetString.signature);
+        env->DeleteLocalRef(localComponentClass);
+    } else {
+        AppendClassFailure(lookupFailures, "Component", mc_mappings::classes::Component);
+    }
     oldXFieldID = env->GetFieldID(Entity::clsEntity, mc_mappings::entity::OldX.name,
                                   mc_mappings::entity::OldX.signature);
     oldYFieldID = env->GetFieldID(Entity::clsEntity, mc_mappings::entity::OldY.name,
@@ -408,6 +441,19 @@ Esp::Esp() {
     if (playerClass != nullptr && getHealthMethodID == nullptr) {
         AppendMemberFailure(lookupFailures, "method", "Player", mc_mappings::player::GetHealth.name,
                             mc_mappings::player::GetHealth.signature);
+    }
+    if (getEntityIdMethodID == nullptr) {
+        AppendMemberFailure(lookupFailures, "method", "Entity", mc_mappings::entity::GetId.name,
+                            mc_mappings::entity::GetId.signature);
+        std::cout << "[ESP] Player name cache disabled until Entity.getId mapping is updated." << std::endl;
+    }
+    if (getNameMethodID == nullptr) {
+        AppendMemberFailure(lookupFailures, "method", "Entity", mc_mappings::entity::GetName.name,
+                            mc_mappings::entity::GetName.signature);
+    }
+    if (getStringMethodID == nullptr) {
+        AppendMemberFailure(lookupFailures, "method", "Component", mc_mappings::component::GetString.name,
+                            mc_mappings::component::GetString.signature);
     }
     if (oldXFieldID == nullptr) {
         AppendMemberFailure(lookupFailures, "field", "Entity", mc_mappings::entity::OldX.name,
@@ -508,8 +554,7 @@ Esp::Esp() {
         return;
     }
 
-    initialized_ = true;
-    {
+    initialized_ = true; {
         std::scoped_lock lock(stateMutex_);
         debugState_.initialized = true;
         SetLookupDebugState(debugState_, "ESP initialized", lookupFailures);
@@ -522,6 +567,8 @@ Esp::~Esp() {
     if (env == nullptr) {
         return;
     }
+
+    ClearNameCache(env);
 
     if (levelClass != nullptr) {
         env->DeleteGlobalRef(levelClass);
@@ -595,6 +642,111 @@ bool Esp::HasRenderCameraLookups() const {
            vec3XFieldID != nullptr &&
            vec3YFieldID != nullptr &&
            vec3ZFieldID != nullptr;
+}
+
+std::string Esp::QueryPlayerName(JNIEnv *env, jobject playerObj) const {
+    if (env == nullptr || playerObj == nullptr || getNameMethodID == nullptr || getStringMethodID == nullptr) {
+        return {};
+    }
+
+    jobject componentObj = env->CallObjectMethod(playerObj, getNameMethodID);
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        return {};
+    }
+    if (componentObj == nullptr) {
+        return {};
+    }
+
+    auto nameJstr = reinterpret_cast<jstring>(env->CallObjectMethod(componentObj, getStringMethodID));
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        env->DeleteLocalRef(componentObj);
+        return {};
+    }
+
+    std::string playerName;
+    if (nameJstr != nullptr) {
+        const char *nameChars = env->GetStringUTFChars(nameJstr, nullptr);
+        if (nameChars != nullptr) {
+            playerName = nameChars;
+            env->ReleaseStringUTFChars(nameJstr, nameChars);
+        } else if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+        }
+        env->DeleteLocalRef(nameJstr);
+    }
+
+    env->DeleteLocalRef(componentObj);
+    return playerName;
+}
+
+std::string Esp::ResolveCachedPlayerName(JNIEnv *env, jobject playerObj, int entityId, uint64_t currentTick) {
+    if (env == nullptr || playerObj == nullptr || entityId == 0 ||
+        getEntityIdMethodID == nullptr || getNameMethodID == nullptr || getStringMethodID == nullptr) {
+        return {};
+    }
+
+    NameCacheEntry &entry = nameCache_[entityId];
+    const bool isNewEntry = entry.lastSeenTick == 0;
+    if (isNewEntry) {
+        entry.entityId = entityId;
+    }
+
+    entry.lastSeenTick = currentTick;
+    const bool shouldRefresh = isNewEntry ||
+                               entry.name.empty() ||
+                               currentTick < entry.lastRefreshTick ||
+                               (currentTick - entry.lastRefreshTick) >= kNameRefreshIntervalMs;
+    if (shouldRefresh) {
+        const std::string refreshedName = QueryPlayerName(env, playerObj);
+        if (!refreshedName.empty()) {
+            const bool changed = entry.name != refreshedName;
+            entry.name = refreshedName;
+            if (isNewEntry) {
+                std::cout << "[ESP] Created player name cache entry: " << entry.name << " [id=" << entityId << "]"
+                          << std::endl;
+            } else if (changed) {
+                std::cout << "[ESP] Refreshed player name cache entry: " << entry.name << " [id=" << entityId << "]"
+                          << std::endl;
+            }
+        }
+        entry.lastRefreshTick = currentTick;
+    }
+
+    return entry.name;
+}
+
+void Esp::PruneNameCache(JNIEnv *env, uint64_t currentTick) {
+    (void) env;
+    if (nameCache_.empty()) {
+        return;
+    }
+
+    for (auto it = nameCache_.begin(); it != nameCache_.end();) {
+        const NameCacheEntry &entry = it->second;
+        const bool expired = currentTick < entry.lastSeenTick || (currentTick - entry.lastSeenTick) >= kNameCacheExpiryMs;
+        if (expired) {
+            if (!entry.name.empty()) {
+                std::cout << "[ESP] Invalidated player name cache entry: " << entry.name << " [id=" << entry.entityId
+                          << "]" << std::endl;
+            }
+            it = nameCache_.erase(it);
+            continue;
+        }
+
+        ++it;
+    }
+}
+
+void Esp::ClearNameCache(JNIEnv *env) {
+    if (env == nullptr) {
+        nameCache_.clear();
+        return;
+    }
+
+    (void) env;
+    nameCache_.clear();
 }
 
 bool Esp::TryReadRenderCameraState(JNIEnv *env, CameraState &renderCamera) const {
@@ -674,6 +826,7 @@ void Esp::Tick() {
         SetStatus("Tick skipped: JNIEnv unavailable");
         return;
     }
+    const uint64_t currentTick = GetTickCount64();
     std::vector<Target> updatedTargets;
     CameraState updatedCamera{};
     bool renderCameraAvailable = HasRenderCameraLookups();
@@ -764,6 +917,7 @@ void Esp::Tick() {
             env->CallDoubleMethod(playerObj, getZMethodID),
             0.0,
             -1.0f,
+            {},
         });
         const double currentEyeY = env->CallDoubleMethod(playerObj, getEyeYMethodID);
         if (ClearPendingJniException(env, "target position reads")) {
@@ -783,8 +937,19 @@ void Esp::Tick() {
             }
         }
 
+        if (getEntityIdMethodID != nullptr) {
+            const jint entityId = env->CallIntMethod(playerObj, getEntityIdMethodID);
+            if (env->ExceptionCheck()) {
+                env->ExceptionClear();
+            } else {
+                target.name = ResolveCachedPlayerName(env, playerObj, static_cast<int>(entityId), currentTick);
+            }
+        }
+
         env->DeleteLocalRef(playerObj);
     }
+
+    PruneNameCache(env, currentTick);
 
     env->DeleteLocalRef(playerList);
     env->DeleteLocalRef(levelObj);
@@ -816,8 +981,7 @@ void Esp::RenderOverlay(bool drawTracer, bool drawBox, bool showDebug, const flo
                         const float *boxColor, float boxThickness) const {
     std::vector<Target> snapshot;
     CameraState cameraSnapshot{};
-    DebugState debugSnapshot{};
-    {
+    DebugState debugSnapshot{}; {
         std::scoped_lock lock(stateMutex_);
         snapshot = targets_;
         cameraSnapshot = cameraState_;
@@ -835,12 +999,20 @@ void Esp::RenderOverlay(bool drawTracer, bool drawBox, bool showDebug, const flo
     const ImVec2 tracerStart(io.DisplaySize.x * 0.5f, io.DisplaySize.y - 42.0f);
     const ImU32 tracerDrawColor = ColorFromArray(tracerColor, IM_COL32(255, 70, 70, 220));
     const ImU32 boxDrawColor = ColorFromArray(boxColor, IM_COL32(255, 70, 70, 210));
+    const ImU32 nameTextColor = IM_COL32(255, 255, 255, 245);
+    const ImU32 nameOutlineColor = IM_COL32(10, 10, 10, 220);
     const ImU32 healthTextColor = IM_COL32(150, 255, 150, 235);
     const ImU32 distanceTextColor = IM_COL32(245, 248, 255, 235);
+    const ImU32 labelShadowColor = IM_COL32(0, 0, 0, 90);
+    const ImU32 labelBackgroundColor = IM_COL32(12, 12, 16, 150);
+    const ImU32 labelBorderColor = IM_COL32(255, 255, 255, 28);
+    ImFont *overlayFont = ImGui::GetFont();
+    const float nameFontSize = 18.0f;
+    const float hpFontSize = 16.0f;
+    const float overlayTextHeight = std::max(nameFontSize, hpFontSize);
     const float tracerLineThickness = std::clamp(tracerThickness, 0.5f, 8.0f);
     const float boxLineThickness = std::clamp(boxThickness, 0.5f, 8.0f);
     const float tracerPointRadius = std::max(2.0f, tracerLineThickness + 1.1f);
-    const float healthFontSize = ImGui::GetFontSize() + 3.0f;
     ImVec2 textPosition(15.0f, 15.0f);
     const ImU32 textColor = IM_COL32(255, 255, 255, 230);
     char lineBuffer[256]{};
@@ -862,7 +1034,8 @@ void Esp::RenderOverlay(bool drawTracer, bool drawBox, bool showDebug, const flo
         drawList->AddText(textPosition, textColor, lineBuffer);
         textPosition.y += 16.0f;
 
-        std::snprintf(lineBuffer, sizeof(lineBuffer), "cam xyz=%.2f %.2f %.2f", debugSnapshot.cameraX, debugSnapshot.cameraY,
+        std::snprintf(lineBuffer, sizeof(lineBuffer), "cam xyz=%.2f %.2f %.2f", debugSnapshot.cameraX,
+                      debugSnapshot.cameraY,
                       debugSnapshot.cameraZ);
         drawList->AddText(textPosition, textColor, lineBuffer);
         textPosition.y += 16.0f;
@@ -887,13 +1060,14 @@ void Esp::RenderOverlay(bool drawTracer, bool drawBox, bool showDebug, const flo
         return;
     }
 
-    for (const Target &target : snapshot) {
+    for (const Target &target: snapshot) {
         const double interpolatedX = Lerp(target.previousX, target.x, frameTime);
         const double interpolatedBaseY = Lerp(target.previousY, target.y, frameTime);
         const double interpolatedY = interpolatedBaseY + target.eyeHeightOffset;
         const double interpolatedZ = Lerp(target.previousZ, target.z, frameTime);
         ImVec2 screenPosition{};
-        if (!WorldToScreen({interpolatedX, interpolatedY - 0.60, interpolatedZ}, cameraSnapshot, io.DisplaySize.x, io.DisplaySize.y,
+        if (!WorldToScreen({interpolatedX, interpolatedY - 0.60, interpolatedZ}, cameraSnapshot, io.DisplaySize.x,
+                           io.DisplaySize.y,
                            screenPosition)) {
             continue;
         }
@@ -939,6 +1113,19 @@ void Esp::RenderOverlay(bool drawTracer, bool drawBox, bool showDebug, const flo
                 if (height >= 6.0f) {
                     const float centerX = (headScreenPosition.x + feetScreenPosition.x) * 0.5f;
                     const float halfWidth = height * 0.19f;
+                    const double distanceX = interpolatedX - cameraSnapshot.x;
+                    const double distanceY = interpolatedBaseY - cameraSnapshot.y;
+                    const double distanceZ = interpolatedZ - cameraSnapshot.z;
+                    const double distanceMeters = std::sqrt(
+                        distanceX * distanceX + distanceY * distanceY + distanceZ * distanceZ);
+                    const float closeRangeBoost = IsFinite(distanceMeters)
+                                                     ? std::clamp(static_cast<float>((6.0 - distanceMeters) / 6.0), 0.0f,
+                                                                  1.0f)
+                                                     : 0.0f;
+                    const float dynamicNameFontSize = nameFontSize + closeRangeBoost * 10.0f;
+                    const float dynamicHpFontSize = hpFontSize + closeRangeBoost * 8.0f;
+                    const float dynamicOverlayTextHeight = std::max(dynamicNameFontSize, dynamicHpFontSize);
+                    const float labelVerticalOffset = 4.0f + closeRangeBoost * 18.0f;
                     drawList->AddRect(ImVec2(centerX - halfWidth, top), ImVec2(centerX + halfWidth, bottom),
                                       boxDrawColor, 0.0f, 0, boxLineThickness);
 
@@ -946,21 +1133,57 @@ void Esp::RenderOverlay(bool drawTracer, bool drawBox, bool showDebug, const flo
                         char healthBuffer[32]{};
                         const float healthValue = std::max(target.health, 0.0f);
                         std::snprintf(healthBuffer, sizeof(healthBuffer), "%.0f HP", healthValue);
-                        ImVec2 healthTextSize = ImGui::CalcTextSize(healthBuffer);
-                        const float healthTextScale = healthFontSize / std::max(ImGui::GetFontSize(), 1.0f);
-                        healthTextSize.x *= healthTextScale;
-                        healthTextSize.y *= healthTextScale;
-                        ImVec2 healthTextPosition(centerX - healthTextSize.x * 0.5f, top - healthFontSize - 4.0f);
+                        const bool hasName = !target.name.empty();
+                        const float spacing = hasName ? 6.0f : 0.0f;
+                        const ImVec2 nameTextSize = hasName
+                                                        ? MeasureText(overlayFont, dynamicNameFontSize, target.name.c_str())
+                                                        : ImVec2(0.0f, 0.0f);
+                        const ImVec2 hpTextSize = MeasureText(overlayFont, dynamicHpFontSize, healthBuffer);
+                        ImVec2 healthTextSize(nameTextSize.x + spacing + hpTextSize.x,
+                                              std::max(nameTextSize.y, hpTextSize.y));
+                        ImVec2 healthTextPosition(centerX - healthTextSize.x * 0.5f,
+                                                  top - dynamicOverlayTextHeight - labelVerticalOffset);
                         healthTextPosition.x = std::clamp(healthTextPosition.x, 4.0f,
                                                           io.DisplaySize.x - healthTextSize.x - 4.0f);
                         healthTextPosition.y = std::max(4.0f, healthTextPosition.y);
-                        drawList->AddText(nullptr, healthFontSize, healthTextPosition, healthTextColor, healthBuffer);
+                        const ImVec2 labelPadding(7.0f, 4.0f);
+                        const float labelRounding = 6.0f;
+                        const ImVec2 labelMin(healthTextPosition.x - labelPadding.x,
+                                              healthTextPosition.y - labelPadding.y);
+                        const ImVec2 labelMax(healthTextPosition.x + healthTextSize.x + labelPadding.x,
+                                              healthTextPosition.y + healthTextSize.y + labelPadding.y);
+                        ImVec2 hpTextPosition = healthTextPosition;
+
+                        drawList->AddRectFilled(ImVec2(labelMin.x + 2.0f, labelMin.y + 3.0f),
+                                                ImVec2(labelMax.x + 2.0f, labelMax.y + 3.0f),
+                                                labelShadowColor, labelRounding);
+                        drawList->AddRectFilled(labelMin, labelMax, labelBackgroundColor, labelRounding);
+                        drawList->AddRect(labelMin, labelMax, labelBorderColor, labelRounding);
+
+                        if (hasName) {
+                            static constexpr ImVec2 outlineOffsets[] = {
+                                ImVec2(-1.0f, 0.0f),
+                                ImVec2(1.0f, 0.0f),
+                                ImVec2(0.0f, -1.0f),
+                                ImVec2(0.0f, 1.0f),
+                            };
+
+                            for (const ImVec2 &offset : outlineOffsets) {
+                                drawList->AddText(overlayFont, dynamicNameFontSize,
+                                                  ImVec2(healthTextPosition.x + offset.x,
+                                                         healthTextPosition.y + offset.y),
+                                                  nameOutlineColor, target.name.c_str());
+                            }
+
+                            drawList->AddText(overlayFont, dynamicNameFontSize, healthTextPosition, nameTextColor,
+                                              target.name.c_str());
+                            hpTextPosition.x += nameTextSize.x + spacing;
+                        }
+
+                        drawList->AddText(overlayFont, dynamicHpFontSize, hpTextPosition, healthTextColor,
+                                          healthBuffer);
                     }
 
-                    const double distanceX = interpolatedX - cameraSnapshot.x;
-                    const double distanceY = interpolatedBaseY - cameraSnapshot.y;
-                    const double distanceZ = interpolatedZ - cameraSnapshot.z;
-                    const double distanceMeters = std::sqrt(distanceX * distanceX + distanceY * distanceY + distanceZ * distanceZ);
                     if (IsFinite(distanceMeters)) {
                         char distanceBuffer[32]{};
                         std::snprintf(distanceBuffer, sizeof(distanceBuffer), "[%.0fm]", distanceMeters);

@@ -85,6 +85,7 @@ namespace mc_mappings {
     } // namespace entity_hit_result
 
     namespace entity {
+        inline constexpr MemberId GetId{"aA", "()I"};
         inline constexpr MemberId GetName{"ap", "()Lyh;"};
         inline constexpr MemberId IsAlive{"cb", "()Z"};
         inline constexpr MemberId GetX{"dP", "()D"};        

@@ -2,8 +2,10 @@
 
 #include <jni.h>
 
+#include <cstdint>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "../classes/minecraft.hpp"
@@ -19,6 +21,7 @@ public:
         double z{};
         double eyeHeightOffset{};
         float health{-1.0f};
+        std::string name{};
     };
 
     struct CameraState {
@@ -55,6 +58,13 @@ public:
         std::string lookupDetails{};
     };
 
+    struct NameCacheEntry {
+        int entityId{};
+        std::string name{};
+        uint64_t lastRefreshTick{};
+        uint64_t lastSeenTick{};
+    };
+
     jclass levelClass{};
     jclass listClass{};
     jclass deltaTrackerTimerClass{};
@@ -82,6 +92,9 @@ public:
     jmethodID getZMethodID{};
     jmethodID getGameTimeDeltaPartialTickMethodID{};
     jmethodID getHealthMethodID{};
+    jmethodID getEntityIdMethodID{};
+    jmethodID getNameMethodID{};
+    jmethodID getStringMethodID{};
     jmethodID getMainCameraMethodID{};
     jmethodID getCameraPositionMethodID{};
     jmethodID getCameraYawMethodID{};
@@ -102,9 +115,14 @@ private:
     float ReadCurrentFrameTime(JNIEnv *env) const;
     bool TryReadRenderCameraState(JNIEnv *env, CameraState &renderCamera) const;
     bool HasRenderCameraLookups() const;
+    std::string ResolveCachedPlayerName(JNIEnv *env, jobject playerObj, int entityId, uint64_t currentTick);
+    std::string QueryPlayerName(JNIEnv *env, jobject playerObj) const;
+    void PruneNameCache(JNIEnv *env, uint64_t currentTick);
+    void ClearNameCache(JNIEnv *env);
 
     mutable std::mutex stateMutex_;
     std::vector<Target> targets_;
+    std::unordered_map<int, NameCacheEntry> nameCache_;
     CameraState cameraState_{};
     DebugState debugState_{};
 };

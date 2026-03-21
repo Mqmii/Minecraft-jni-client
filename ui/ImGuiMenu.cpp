@@ -85,15 +85,17 @@ std::string VirtualKeyToString(int virtualKey) {
 }
 } // namespace
 
-bool ImGuiMenu::Initialize(HWND window) {
+bool ImGuiMenu::Initialize(HWND window, HGLRC renderContext) {
     if (initialized_) {
         return true;
     }
 
     std::cout << "[MENU] Creating ImGui context for window 0x" << std::hex << reinterpret_cast<uintptr_t>(window)
-              << std::dec << std::endl;
+              << " context=0x" << reinterpret_cast<uintptr_t>(renderContext) << std::dec << std::endl;
 
-    ImGui::CreateContext();
+    context_ = ImGui::CreateContext();
+    renderContext_ = renderContext;
+    BindContext();
 
     ImGui::StyleColorsDark();
 
@@ -101,82 +103,133 @@ bool ImGuiMenu::Initialize(HWND window) {
     io.Fonts->Clear();
     io.Fonts->AddFontDefault();
 
-    if (!ImGui_ImplWin32_Init(window)) {
-        ImGui::DestroyContext();
+    if (!ImGui_ImplWin32_InitForOpenGL(window)) {
+        ImGui::DestroyContext(context_);
+        ResetRuntimeState(true);
         return false;
     }
 
     if (!ImGui_ImplOpenGL3_Init("#version 150")) {
         ImGui_ImplWin32_Shutdown();
-        ImGui::DestroyContext();
+        ImGui::DestroyContext(context_);
+        ResetRuntimeState(true);
         return false;
     }
 
     io.IniFilename = nullptr;
     io.LogFilename = nullptr;
-    ImGui_ImplOpenGL3_DestroyDeviceObjects();
     if (!ImGui_ImplOpenGL3_CreateDeviceObjects()) {
         std::cout << "[MENU] Failed to create OpenGL device objects." << std::endl;
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplWin32_Shutdown();
-        ImGui::DestroyContext();
+        ImGui::DestroyContext(context_);
+        ResetRuntimeState(true);
         return false;
     }
     std::cout << "[MENU] Font atlas and OpenGL device objects created successfully." << std::endl;
 
     window_ = window;
-    showMenu_ = false;
     menuInputEnabled_ = false;
     insertWasDown_ = false;
+    toggleKeyPollingEnabled_ = true;
     triggerBotHotkeyWasDown_ = false;
     waitingForTriggerBotHotkey_ = false;
     triggerBotHotkey_ = VK_LMENU;
     loggedFirstRenderFrame_ = false;
+    loggedFirstVisibleMenuFrame_ = false;
     initialized_ = true;
+    ApplyMenuInputState();
     std::cout << "[MENU] ImGuiMenu initialization complete." << std::endl;
     return true;
 }
 
-void ImGuiMenu::Shutdown(bool shutdownRenderer) {
+bool ImGuiMenu::ShutdownForCurrentContext(HGLRC currentContext, bool resetMenuVisibility) {
     if (!initialized_) {
+        ResetRuntimeState(resetMenuVisibility);
+        return true;
+    }
+
+    if (renderContext_ != nullptr && currentContext != nullptr && currentContext != renderContext_) {
+        return false;
+    }
+
+    BindContext();
+    std::cout << "[MENU] Shutdown requested on thread " << GetCurrentThreadId() << " for context 0x" << std::hex
+              << reinterpret_cast<uintptr_t>(currentContext != nullptr ? currentContext : renderContext_) << std::dec
+              << std::endl;
+
+    if (resetMenuVisibility) {
+        showMenu_ = false;
+    }
+    ApplyMenuInputState();
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplWin32_Shutdown();
+    ImGui::DestroyContext(context_);
+    ResetRuntimeState(resetMenuVisibility);
+    std::cout << "[MENU] Shutdown complete." << std::endl;
+    return true;
+}
+
+void ImGuiMenu::AbandonRendererState(bool resetMenuVisibility) {
+    if (!initialized_) {
+        ResetRuntimeState(resetMenuVisibility);
         return;
     }
 
-    std::cout << "[MENU] Shutdown requested. shutdownRenderer=" << (shutdownRenderer ? 1 : 0) << std::endl;
+    BindContext();
+    std::cout << "[MENU] Abandoning renderer state for stale context 0x" << std::hex
+              << reinterpret_cast<uintptr_t>(renderContext_) << std::dec << std::endl;
 
-    showMenu_ = false;
-    ApplyMenuInputState();
-
-    if (shutdownRenderer) {
-        ImGui_ImplOpenGL3_Shutdown();
-    } else {
-        // We may be unloading from a non-render thread without the original GL context.
-        // Clear renderer backend bookkeeping so DestroyContext() doesn't assert.
-        ImGuiIO &io = ImGui::GetIO();
-        ImGuiPlatformIO &platformIo = ImGui::GetPlatformIO();
-        io.BackendRendererName = nullptr;
-        io.BackendRendererUserData = nullptr;
-        io.BackendFlags &= ~(ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures);
-        platformIo.ClearRendererHandlers();
+    if (resetMenuVisibility) {
+        showMenu_ = false;
     }
+    ApplyMenuInputState();
     ImGui_ImplWin32_Shutdown();
-    ImGui::DestroyContext();
 
+    ImGuiIO &io = ImGui::GetIO();
+    ImGuiPlatformIO &platformIo = ImGui::GetPlatformIO();
+    io.BackendRendererName = nullptr;
+    io.BackendRendererUserData = nullptr;
+    io.BackendFlags &= ~(ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures);
+    platformIo.ClearRendererHandlers();
+
+    ImGui::DestroyContext(context_);
+    ResetRuntimeState(resetMenuVisibility);
+    std::cout << "[MENU] Renderer state abandoned." << std::endl;
+}
+
+void ImGuiMenu::ResetRuntimeState(bool resetMenuVisibility) {
     initialized_ = false;
+    menuInputEnabled_ = false;
     insertWasDown_ = false;
+    toggleKeyPollingEnabled_ = true;
     triggerBotHotkeyWasDown_ = false;
     waitingForTriggerBotHotkey_ = false;
     window_ = nullptr;
+    renderContext_ = nullptr;
+    context_ = nullptr;
     loggedFirstRenderFrame_ = false;
-    std::cout << "[MENU] Shutdown complete." << std::endl;
+    loggedFirstVisibleMenuFrame_ = false;
+    cursorVisibilityAdjustments_ = 0;
+    if (resetMenuVisibility) {
+        showMenu_ = false;
+    }
+}
+
+void ImGuiMenu::BindContext() const {
+    if (context_ != nullptr) {
+        ImGui::SetCurrentContext(context_);
+    }
 }
 
 void ImGuiMenu::UpdateToggleState() {
-    const bool insertDown = (GetAsyncKeyState(VK_INSERT) & 0x8000) != 0;
-    if (insertDown && !insertWasDown_) {
-        ToggleMenu();
+    if (toggleKeyPollingEnabled_) {
+        const bool insertDown = (GetAsyncKeyState(VK_INSERT) & 0x8000) != 0;
+        if (insertDown && !insertWasDown_) {
+            ToggleMenu("poll");
+        }
+        insertWasDown_ = insertDown;
     }
-    insertWasDown_ = insertDown;
 
     UpdateTriggerBotHotkeyState();
 }
@@ -189,14 +242,19 @@ void ImGuiMenu::UpdateTriggerBotHotkeyState() {
 
     const bool hotkeyDown = (GetAsyncKeyState(triggerBotHotkey_) & 0x8000) != 0;
     if (hotkeyDown && !triggerBotHotkeyWasDown_) {
+        std::scoped_lock stateLock(stateMutex_);
         state_.triggerBot = !state_.triggerBot;
     }
     triggerBotHotkeyWasDown_ = hotkeyDown;
 }
 
-void ImGuiMenu::ToggleMenu() {
+void ImGuiMenu::ToggleMenu(const char *source) {
     showMenu_ = !showMenu_;
-    std::cout << "[MENU] INSERT toggle -> " << (showMenu_ ? "visible" : "hidden") << std::endl;
+    if (!showMenu_) {
+        loggedFirstVisibleMenuFrame_ = false;
+    }
+    std::cout << "[MENU] INSERT toggle (" << source << ") -> " << (showMenu_ ? "visible" : "hidden")
+              << std::endl;
     ApplyMenuInputState();
 }
 
@@ -206,6 +264,8 @@ void ImGuiMenu::ApplyMenuInputState() {
         menuInputEnabled_ = false;
         return;
     }
+
+    BindContext();
 
     if (showMenu_ == menuInputEnabled_) {
         return;
@@ -237,6 +297,8 @@ void ImGuiMenu::ApplyMenuInputState() {
 }
 
 void ImGuiMenu::DrawMenu() {
+    BindContext();
+    std::scoped_lock stateLock(stateMutex_);
     ImGui::SetNextWindowSize(ImVec2(300.0f, 0.0f), ImGuiCond_Appearing);
     ImGui::SetNextWindowSizeConstraints(ImVec2(300.0f, 0.0f), ImVec2(FLT_MAX, FLT_MAX));
     ImGui::Begin("JNI Cheat");
@@ -273,15 +335,21 @@ void ImGuiMenu::DrawMenu() {
 }
 
 void ImGuiMenu::DrawModuleStatusOverlay() const {
+    BindContext();
     ImDrawList *drawList = ImGui::GetBackgroundDrawList();
     if (drawList == nullptr) {
         return;
     }
 
+    const bool triggerBotEnabled = [&]() {
+        std::scoped_lock stateLock(stateMutex_);
+        return state_.triggerBot;
+    }();
+
     const ImVec2 basePosition(14.0f, 14.0f);
     const float fontSize = ImGui::GetFontSize() + 5.0f;
-    const char *statusText = state_.triggerBot ? "TriggerBot: ON" : "TriggerBot: OFF";
-    const ImU32 statusColor = state_.triggerBot ? IM_COL32(150, 255, 170, 235) : IM_COL32(255, 170, 170, 235);
+    const char *statusText = triggerBotEnabled ? "TriggerBot: ON" : "TriggerBot: OFF";
+    const ImU32 statusColor = triggerBotEnabled ? IM_COL32(150, 255, 170, 235) : IM_COL32(255, 170, 170, 235);
     const ImU32 shadowColor = IM_COL32(0, 0, 0, 185);
 
     drawList->AddText(nullptr, fontSize, ImVec2(basePosition.x + 1.0f, basePosition.y + 1.0f), shadowColor, statusText);
@@ -289,6 +357,7 @@ void ImGuiMenu::DrawModuleStatusOverlay() const {
 }
 
 void ImGuiMenu::DrawTriggerBotHotkeyControl() {
+    BindContext();
     ImGui::TextDisabled("Hotkey:");
     ImGui::SameLine();
 
@@ -310,6 +379,7 @@ void ImGuiMenu::RenderFrame() {
         return;
     }
 
+    BindContext();
     if (!loggedFirstRenderFrame_) {
         std::cout << "[MENU] First RenderFrame call received." << std::endl;
         loggedFirstRenderFrame_ = true;
@@ -323,10 +393,12 @@ void ImGuiMenu::RenderFrame() {
 
     DrawModuleStatusOverlay();
 
-    if (esp_ != nullptr && (state_.tracer || state_.boxEsp || state_.espDebug)) {
+    const ImGuiMenuState stateSnapshot = GetStateSnapshot();
+    if (esp_ != nullptr && (stateSnapshot.tracer || stateSnapshot.boxEsp || stateSnapshot.espDebug)) {
         esp_->Tick();
-        esp_->RenderOverlay(state_.tracer, state_.boxEsp, state_.espDebug, state_.tracerColor, state_.tracerThickness,
-                            state_.boxColor, state_.boxThickness);
+        esp_->RenderOverlay(stateSnapshot.tracer, stateSnapshot.boxEsp, stateSnapshot.espDebug,
+                            stateSnapshot.tracerColor, stateSnapshot.tracerThickness, stateSnapshot.boxColor,
+                            stateSnapshot.boxThickness);
     }
 
     if (showMenu_) {
@@ -334,7 +406,17 @@ void ImGuiMenu::RenderFrame() {
     }
 
     ImGui::Render();
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    ImDrawData *drawData = ImGui::GetDrawData();
+    if (showMenu_ && drawData != nullptr && !loggedFirstVisibleMenuFrame_) {
+        loggedFirstVisibleMenuFrame_ = true;
+        const unsigned long long fontTextureId = static_cast<unsigned long long>(ImGui::GetIO().Fonts->TexRef.GetTexID());
+        std::cout << "[MENU] First visible frame: cmdLists=" << drawData->CmdListsCount
+                  << " vtx=" << drawData->TotalVtxCount << " idx=" << drawData->TotalIdxCount << " fontTex=0x"
+                  << std::hex << fontTextureId << std::dec << std::endl;
+    }
+    if (drawData != nullptr && drawData->CmdListsCount > 0) {
+        ImGui_ImplOpenGL3_RenderDrawData(drawData);
+    }
 }
 
 bool ImGuiMenu::HandleWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -342,13 +424,14 @@ bool ImGuiMenu::HandleWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         return false;
     }
 
+    BindContext();
     if (TryBindTriggerBotHotkey(uMsg, wParam)) {
         return true;
     }
 
     const bool isInitialKeyPress = (lParam & (1LL << 30)) == 0;
     if ((uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && wParam == VK_INSERT && isInitialKeyPress) {
-        ToggleMenu();
+        ToggleMenu("wndproc");
         insertWasDown_ = true;
         return true;
     }
@@ -423,14 +506,25 @@ void ImGuiMenu::SetEsp(Esp *esp) {
     esp_ = esp;
 }
 
+void ImGuiMenu::SetToggleKeyPollingEnabled(bool enabled) {
+    toggleKeyPollingEnabled_ = enabled;
+    insertWasDown_ = false;
+}
+
+void ImGuiMenu::SetRunning(bool running) {
+    std::scoped_lock stateLock(stateMutex_);
+    state_.running = running;
+}
+
 bool ImGuiMenu::IsInitialized() const {
     return initialized_;
 }
 
-ImGuiMenuState &ImGuiMenu::State() {
-    return state_;
+HGLRC ImGuiMenu::RenderContext() const {
+    return renderContext_;
 }
 
-const ImGuiMenuState &ImGuiMenu::State() const {
+ImGuiMenuState ImGuiMenu::GetStateSnapshot() const {
+    std::scoped_lock stateLock(stateMutex_);
     return state_;
 }

@@ -18,8 +18,7 @@ public:
     void Shutdown();
     void SetEsp(Esp *esp);
 
-    ImGuiMenuState &State();
-    const ImGuiMenuState &State() const;
+    ImGuiMenuState GetStateSnapshot() const;
 
 private:
     using SwapBuffersFn = BOOL(WINAPI *)(HDC);
@@ -32,8 +31,11 @@ private:
     HWND ResolveGameWindow(HDC hDc) const;
     bool ObserveStableRenderTarget(HWND hWnd, HGLRC context);
     void ResetObservedRenderTarget();
+    bool PerformRenderThreadShutdown(HGLRC currentContext);
+    void ResetBoundRenderer(bool resetMenuVisibility);
+    bool WaitForRenderThreadShutdown();
     void WaitForCallbacksToDrain() const;
-    BOOL RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn);
+    BOOL RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn, const char *hookName);
 
     static BOOL WINAPI HookedSwapBuffers(HDC hDc);
     static BOOL WINAPI HookedWglSwapBuffers(HDC hDc);
@@ -59,7 +61,10 @@ private:
     bool wglHookInstalled_ = false;
     bool loggedMissingContext_ = false;
     bool loggedFirstRenderCallback_ = false;
+    bool loggedRenderThreadShutdownWait_ = false;
+    bool loggedSingleHookStrategy_ = false;
     std::atomic_bool shuttingDown_ = false;
+    std::atomic_bool renderThreadShutdownComplete_ = false;
     std::atomic_uint32_t activeSwapCalls_ = 0;
     std::atomic_uint32_t activeWndProcCalls_ = 0;
     mutable std::recursive_mutex renderMutex_;
