@@ -6,9 +6,9 @@ class Minecraft;
 
 class FastBreak {
 public:
-    JNIEnv *env{};
     Minecraft *mc{};
-    jobject obj_Gamemode{};
+    jclass gameModeClass{};
+    jfieldID gameModeFieldID{};
     jfieldID fid_destroydelay{};
     jfieldID fid_destroyprogress{};
     float break_damage{};

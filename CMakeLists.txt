@@ -30,9 +30,11 @@ set(IMGUI_SOURCES
 )
 
 add_library(MinecraftWrapperJNI SHARED
+        CrashDiagnostics.cpp
         main.cpp
         jni/JniEnvironment.cpp
         ui/ImGuiMenu.cpp
+        ui/EspOverlayRenderer.cpp
         ui/UiHookManager.cpp
         classes/minecraft.cpp
         modules/FastBreak.cpp

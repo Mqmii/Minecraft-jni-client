@@ -5,19 +5,62 @@
 #include "../jni/JniEnvironment.hpp"
 #include "../jni/MinecraftMappings.hpp"
 
-Minecraft::Minecraft() : env(JniEnvironment::GetCurrentEnv()) {
-    jclass localClass = env->FindClass(mc_mappings::classes::Minecraft);
-    minecraftClass = (jclass) env->NewGlobalRef(localClass);
-    env->DeleteLocalRef(localClass);
+namespace {
+bool ClearMinecraftException(JNIEnv *env, const char *context) {
+    if (env == nullptr || !env->ExceptionCheck()) {
+        return false;
+    }
 
-    jfieldID fidInstance = env->GetStaticFieldID(
+    std::cout << "[Minecraft] JNI call failed at " << context << std::endl;
+    env->ExceptionClear();
+    return true;
+}
+} // namespace
+
+Minecraft::Minecraft() {
+    JNIEnv *env = JniEnvironment::GetOrAttachCurrentEnv("JNI Cheat");
+    if (env == nullptr) {
+        std::cout << "[ERROR] Failed to resolve JNIEnv for Minecraft wrapper." << std::endl;
+        return;
+    }
+
+    jclass localClass = env->FindClass(mc_mappings::classes::Minecraft);
+    if (localClass == nullptr) {
+        ClearMinecraftException(env, "FindClass(Minecraft)");
+        std::cout << "[ERROR] Minecraft class not found." << std::endl;
+        return;
+    }
+
+    minecraftClass = reinterpret_cast<jclass>(env->NewGlobalRef(localClass));
+    env->DeleteLocalRef(localClass);
+    if (minecraftClass == nullptr) {
+        std::cout << "[ERROR] Failed to create global Minecraft class ref." << std::endl;
+        return;
+    }
+
+    const jfieldID fidInstance = env->GetStaticFieldID(
         minecraftClass,
         mc_mappings::minecraft::Instance.name,
         mc_mappings::minecraft::Instance.signature);
+    if (fidInstance == nullptr || ClearMinecraftException(env, "Minecraft.Instance")) {
+        std::cout << "[ERROR] Minecraft instance field not found." << std::endl;
+        return;
+    }
+
     jobject localInstance = env->GetStaticObjectField(minecraftClass, fidInstance);
+    if (localInstance == nullptr || ClearMinecraftException(env, "Minecraft.Instance read")) {
+        if (localInstance != nullptr) {
+            env->DeleteLocalRef(localInstance);
+        }
+        std::cout << "[ERROR] Minecraft instance object not found." << std::endl;
+        return;
+    }
 
     mcInstance = env->NewGlobalRef(localInstance);
     env->DeleteLocalRef(localInstance);
+    if (mcInstance == nullptr) {
+        std::cout << "[ERROR] Failed to create global Minecraft instance ref." << std::endl;
+    }
 }
 
 Minecraft::~Minecraft() {
@@ -44,51 +87,115 @@ jclass Minecraft::getMinecraftClass() {
     return minecraftClass;
 }
 
-JNIEnv *Minecraft::GetEnv() const {
-    return env;
-}
-
 void Minecraft::fullBright() const {
-    jfieldID fid_options = env->GetFieldID(
+    JNIEnv *env = JniEnvironment::GetOrAttachCurrentEnv("JNI Cheat");
+    if (env == nullptr || minecraftClass == nullptr || mcInstance == nullptr) {
+        return;
+    }
+
+    const jfieldID fidOptions = env->GetFieldID(
         minecraftClass,
         mc_mappings::minecraft::Options.name,
         mc_mappings::minecraft::Options.signature);
-    if (fid_options == nullptr) {
+    if (fidOptions == nullptr || ClearMinecraftException(env, "Minecraft.options")) {
         std::cout << "[ERROR] options field ID not found." << std::endl;
+        return;
     }
-    jobject options_obj = env->GetObjectField(mcInstance, fid_options);
-    if (options_obj == nullptr) {
+
+    jobject optionsObj = env->GetObjectField(mcInstance, fidOptions);
+    if (optionsObj == nullptr || ClearMinecraftException(env, "Minecraft.options read")) {
+        if (optionsObj != nullptr) {
+            env->DeleteLocalRef(optionsObj);
+        }
         std::cout << "[ERROR] options object not found." << std::endl;
+        return;
     }
-    jclass clsOptions = env->GetObjectClass(options_obj);
-    jfieldID gamma_fid = env->GetFieldID(
+
+    jclass clsOptions = env->GetObjectClass(optionsObj);
+    if (clsOptions == nullptr) {
+        env->DeleteLocalRef(optionsObj);
+        return;
+    }
+
+    const jfieldID gammaFid = env->GetFieldID(
         clsOptions,
         mc_mappings::options::Gamma.name,
         mc_mappings::options::Gamma.signature);
-    if (gamma_fid == nullptr) {
+    if (gammaFid == nullptr || ClearMinecraftException(env, "Options.gamma")) {
         std::cout << "[ERROR] gamma field ID not found." << std::endl;
-    }
-    jobject gamma_obj = env->GetObjectField(options_obj, gamma_fid);
-    if (gamma_obj == nullptr) {
-        std::cout << "[ERROR] gamma object not found." << std::endl;
+        env->DeleteLocalRef(clsOptions);
+        env->DeleteLocalRef(optionsObj);
+        return;
     }
 
-    jclass clsOptionInstance = env->GetObjectClass(gamma_obj);
-    jfieldID fid_value = env->GetFieldID(
+    jobject gammaObj = env->GetObjectField(optionsObj, gammaFid);
+    if (gammaObj == nullptr || ClearMinecraftException(env, "Options.gamma read")) {
+        if (gammaObj != nullptr) {
+            env->DeleteLocalRef(gammaObj);
+        }
+        std::cout << "[ERROR] gamma object not found." << std::endl;
+        env->DeleteLocalRef(clsOptions);
+        env->DeleteLocalRef(optionsObj);
+        return;
+    }
+
+    jclass clsOptionInstance = env->GetObjectClass(gammaObj);
+    if (clsOptionInstance == nullptr) {
+        env->DeleteLocalRef(gammaObj);
+        env->DeleteLocalRef(clsOptions);
+        env->DeleteLocalRef(optionsObj);
+        return;
+    }
+
+    const jfieldID fidValue = env->GetFieldID(
         clsOptionInstance,
         mc_mappings::option_instance::Value.name,
         mc_mappings::option_instance::Value.signature);
-    if (fid_value == nullptr) {
+    if (fidValue == nullptr || ClearMinecraftException(env, "OptionInstance.value")) {
         std::cout << "[ERROR] value field ID not found." << std::endl;
+        env->DeleteLocalRef(clsOptionInstance);
+        env->DeleteLocalRef(gammaObj);
+        env->DeleteLocalRef(clsOptions);
+        env->DeleteLocalRef(optionsObj);
+        return;
     }
 
     jclass clsDouble = env->FindClass(mc_mappings::classes::JavaDouble);
-    jmethodID mid_DoubleInit = env->GetMethodID(
+    if (clsDouble == nullptr) {
+        ClearMinecraftException(env, "FindClass(Double)");
+        env->DeleteLocalRef(clsOptionInstance);
+        env->DeleteLocalRef(gammaObj);
+        env->DeleteLocalRef(clsOptions);
+        env->DeleteLocalRef(optionsObj);
+        return;
+    }
+
+    const jmethodID midDoubleInit = env->GetMethodID(
         clsDouble,
         mc_mappings::java_double::Constructor.name,
         mc_mappings::java_double::Constructor.signature);
-    jobject newGammaValue = env->NewObject(clsDouble, mid_DoubleInit, 1000.0);
+    if (midDoubleInit == nullptr || ClearMinecraftException(env, "Double.<init>")) {
+        env->DeleteLocalRef(clsDouble);
+        env->DeleteLocalRef(clsOptionInstance);
+        env->DeleteLocalRef(gammaObj);
+        env->DeleteLocalRef(clsOptions);
+        env->DeleteLocalRef(optionsObj);
+        return;
+    }
 
-    env->SetObjectField(gamma_obj, fid_value, newGammaValue);
-    std::cout << "[INFO] FullBright enabled." << std::endl;
+    jobject newGammaValue = env->NewObject(clsDouble, midDoubleInit, 1000.0);
+    if (newGammaValue != nullptr && !ClearMinecraftException(env, "Double new")) {
+        env->SetObjectField(gammaObj, fidValue, newGammaValue);
+        ClearMinecraftException(env, "OptionInstance.value write");
+        std::cout << "[INFO] FullBright enabled." << std::endl;
+    }
+
+    if (newGammaValue != nullptr) {
+        env->DeleteLocalRef(newGammaValue);
+    }
+    env->DeleteLocalRef(clsDouble);
+    env->DeleteLocalRef(clsOptionInstance);
+    env->DeleteLocalRef(gammaObj);
+    env->DeleteLocalRef(clsOptions);
+    env->DeleteLocalRef(optionsObj);
 }

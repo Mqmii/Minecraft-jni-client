@@ -22,6 +22,7 @@
 namespace {
     constexpr uint64_t kNameRefreshIntervalMs = 15000;
     constexpr uint64_t kNameCacheExpiryMs = 15000;
+    constexpr bool kLogNameCacheActivity = false;
 
     bool ClearPendingJniException(JNIEnv *env, const char *context) {
         if (env == nullptr || !env->ExceptionCheck()) {
@@ -287,7 +288,7 @@ namespace {
 } // namespace
 
 Esp::Esp() {
-    JNIEnv *env = JniEnvironment::GetCurrentEnv();
+    JNIEnv *env = JniEnvironment::GetOrAttachCurrentEnv("JNI Cheat");
     std::string lookupFailures;
     if (env == nullptr || Minecraft::getMinecraftClass() == nullptr || Entity::clsEntity == nullptr) {
         std::cout << "[ESP] JNI environment or required classes are unavailable." << std::endl;
@@ -357,6 +358,14 @@ Esp::Esp() {
         AppendClassFailure(lookupFailures, "Vec3", mc_mappings::classes::Vec3);
     }
 
+    jclass localLivingEntityClass = env->FindClass(mc_mappings::classes::LivingEntity);
+    if (localLivingEntityClass != nullptr) {
+        livingEntityClass = reinterpret_cast<jclass>(env->NewGlobalRef(localLivingEntityClass));
+        env->DeleteLocalRef(localLivingEntityClass);
+    } else {
+        AppendClassFailure(lookupFailures, "LivingEntity", mc_mappings::classes::LivingEntity);
+    }
+
     jclass localPlayerClass = env->FindClass(mc_mappings::classes::Player);
     if (localPlayerClass != nullptr) {
         playerClass = reinterpret_cast<jclass>(env->NewGlobalRef(localPlayerClass));
@@ -387,8 +396,8 @@ Esp::Esp() {
                                        mc_mappings::entity::GetEyeY.signature);
     getZMethodID = env->GetMethodID(Entity::clsEntity, mc_mappings::entity::GetZ.name,
                                     mc_mappings::entity::GetZ.signature);
-    if (playerClass != nullptr) {
-        getHealthMethodID = env->GetMethodID(playerClass, mc_mappings::player::GetHealth.name,
+    if (livingEntityClass != nullptr) {
+        getHealthMethodID = env->GetMethodID(livingEntityClass, mc_mappings::player::GetHealth.name,
                                              mc_mappings::player::GetHealth.signature);
     }
     getEntityIdMethodID = env->GetMethodID(Entity::clsEntity, mc_mappings::entity::GetId.name,
@@ -438,8 +447,8 @@ Esp::Esp() {
         AppendMemberFailure(lookupFailures, "method", "Entity", mc_mappings::entity::GetZ.name,
                             mc_mappings::entity::GetZ.signature);
     }
-    if (playerClass != nullptr && getHealthMethodID == nullptr) {
-        AppendMemberFailure(lookupFailures, "method", "Player", mc_mappings::player::GetHealth.name,
+    if (livingEntityClass != nullptr && getHealthMethodID == nullptr) {
+        AppendMemberFailure(lookupFailures, "method", "LivingEntity", mc_mappings::player::GetHealth.name,
                             mc_mappings::player::GetHealth.signature);
     }
     if (getEntityIdMethodID == nullptr) {
@@ -594,6 +603,10 @@ Esp::~Esp() {
         env->DeleteGlobalRef(vec3Class);
         vec3Class = nullptr;
     }
+    if (livingEntityClass != nullptr) {
+        env->DeleteGlobalRef(livingEntityClass);
+        livingEntityClass = nullptr;
+    }
     if (playerClass != nullptr) {
         env->DeleteGlobalRef(playerClass);
         playerClass = nullptr;
@@ -602,6 +615,37 @@ Esp::~Esp() {
 
 bool Esp::IsInitialized() const {
     return initialized_;
+}
+
+Esp::RenderSnapshot Esp::GetRenderSnapshot() const {
+    std::scoped_lock lock(stateMutex_);
+
+    RenderSnapshot snapshot;
+    snapshot.targets = targets_;
+    snapshot.debugState = debugState_;
+    snapshot.initialized = initialized_;
+    return snapshot;
+}
+
+Esp::RenderCameraState Esp::CaptureRenderCameraState() const {
+    RenderCameraState snapshot;
+    if (!initialized_) {
+        return snapshot;
+    }
+
+    JNIEnv *env = JniEnvironment::GetOrAttachCurrentEnv("JNI Cheat Render");
+    if (env == nullptr) {
+        return snapshot;
+    }
+
+    snapshot.interpolationAlpha = ReadCurrentFrameTime(env);
+    snapshot.valid = TryReadRenderCameraState(env, snapshot.interpolationAlpha, snapshot.cameraState);
+    return snapshot;
+}
+
+Esp::DebugState Esp::GetDebugStateSnapshot() const {
+    std::scoped_lock lock(stateMutex_);
+    return debugState_;
 }
 
 void Esp::SetStatusLocked(const char *status) {
@@ -618,7 +662,12 @@ float Esp::ReadCurrentFrameTime(JNIEnv *env) const {
         return 1.0f;
     }
 
-    jobject deltaTrackerObj = env->GetObjectField(Minecraft::getMcInstance(), deltaTrackerField);
+    jobject mcInstance = Minecraft::getMcInstance();
+    if (mcInstance == nullptr) {
+        return 1.0f;
+    }
+
+    jobject deltaTrackerObj = env->GetObjectField(mcInstance, deltaTrackerField);
     if (deltaTrackerObj == nullptr) {
         return 1.0f;
     }
@@ -703,13 +752,15 @@ std::string Esp::ResolveCachedPlayerName(JNIEnv *env, jobject playerObj, int ent
         if (!refreshedName.empty()) {
             const bool changed = entry.name != refreshedName;
             entry.name = refreshedName;
-            if (isNewEntry) {
+            if (kLogNameCacheActivity && isNewEntry) {
                 std::cout << "[ESP] Created player name cache entry: " << entry.name << " [id=" << entityId << "]"
                           << std::endl;
-            } else if (changed) {
+            } else if (kLogNameCacheActivity && changed) {
                 std::cout << "[ESP] Refreshed player name cache entry: " << entry.name << " [id=" << entityId << "]"
                           << std::endl;
             }
+        } else {
+            entry.name.clear();
         }
         entry.lastRefreshTick = currentTick;
     }
@@ -727,7 +778,7 @@ void Esp::PruneNameCache(JNIEnv *env, uint64_t currentTick) {
         const NameCacheEntry &entry = it->second;
         const bool expired = currentTick < entry.lastSeenTick || (currentTick - entry.lastSeenTick) >= kNameCacheExpiryMs;
         if (expired) {
-            if (!entry.name.empty()) {
+            if (kLogNameCacheActivity && !entry.name.empty()) {
                 std::cout << "[ESP] Invalidated player name cache entry: " << entry.name << " [id=" << entry.entityId
                           << "]" << std::endl;
             }
@@ -749,12 +800,17 @@ void Esp::ClearNameCache(JNIEnv *env) {
     nameCache_.clear();
 }
 
-bool Esp::TryReadRenderCameraState(JNIEnv *env, CameraState &renderCamera) const {
+bool Esp::TryReadRenderCameraState(JNIEnv *env, float frameTime, CameraState &renderCamera) const {
     if (env == nullptr || !HasRenderCameraLookups()) {
         return false;
     }
 
-    jobject gameRendererObj = env->GetObjectField(Minecraft::getMcInstance(), gameRendererField);
+    jobject mcInstance = Minecraft::getMcInstance();
+    if (mcInstance == nullptr) {
+        return false;
+    }
+
+    jobject gameRendererObj = env->GetObjectField(mcInstance, gameRendererField);
     if (gameRendererObj == nullptr) {
         return false;
     }
@@ -783,7 +839,6 @@ bool Esp::TryReadRenderCameraState(JNIEnv *env, CameraState &renderCamera) const
     const double cameraZ = env->GetDoubleField(positionObj, vec3ZFieldID);
     const float cameraYaw = env->CallFloatMethod(cameraObj, getCameraYawMethodID);
     const float cameraPitch = env->CallFloatMethod(cameraObj, getCameraPitchMethodID);
-    const float frameTime = ReadCurrentFrameTime(env);
     const jfloat renderFovValue = env->CallFloatMethod(gameRendererObj, getRenderFovMethodID, cameraObj, frameTime,
                                                        JNI_TRUE);
 
@@ -821,7 +876,7 @@ void Esp::Tick() {
         return;
     }
 
-    JNIEnv *env = JniEnvironment::GetCurrentEnv();
+    JNIEnv *env = JniEnvironment::GetOrAttachCurrentEnv("JNI Cheat Render");
     if (env == nullptr) {
         SetStatus("Tick skipped: JNIEnv unavailable");
         return;
@@ -829,8 +884,14 @@ void Esp::Tick() {
     const uint64_t currentTick = GetTickCount64();
     std::vector<Target> updatedTargets;
     CameraState updatedCamera{};
+    const float frameInterpolationAlpha = ReadCurrentFrameTime(env);
     bool renderCameraAvailable = HasRenderCameraLookups();
-    const bool renderCameraUsed = TryReadRenderCameraState(env, updatedCamera);
+    const bool renderCameraUsed = TryReadRenderCameraState(env, frameInterpolationAlpha, updatedCamera);
+    jobject mcInstance = Minecraft::getMcInstance();
+    if (mcInstance == nullptr) {
+        SetStatus("Tick skipped: Minecraft instance unavailable");
+        return;
+    }
 
     jobject localPlayer = LocalPlayer::getLocalPlayerObject();
     const bool localPlayerValid = localPlayer != nullptr;
@@ -838,11 +899,10 @@ void Esp::Tick() {
     bool playerListValid = false;
     int playerCountValue = 0;
 
-    jobject levelObj = env->GetObjectField(Minecraft::getMcInstance(), levelField);
+    jobject levelObj = env->GetObjectField(mcInstance, levelField);
     if (levelObj == nullptr || ClearPendingJniException(env, "Minecraft.level read")) {
         std::scoped_lock lock(stateMutex_);
         targets_.clear();
-        cameraState_ = updatedCamera;
         debugState_.localPlayerValid = localPlayerValid;
         debugState_.levelValid = false;
         debugState_.playerListValid = false;
@@ -870,7 +930,6 @@ void Esp::Tick() {
         env->DeleteLocalRef(levelObj);
         std::scoped_lock lock(stateMutex_);
         targets_.clear();
-        cameraState_ = updatedCamera;
         debugState_.localPlayerValid = localPlayerValid;
         debugState_.levelValid = levelValid;
         debugState_.playerListValid = false;
@@ -915,6 +974,7 @@ void Esp::Tick() {
             env->CallDoubleMethod(playerObj, getXMethodID),
             env->CallDoubleMethod(playerObj, getYMethodID),
             env->CallDoubleMethod(playerObj, getZMethodID),
+            0,
             0.0,
             -1.0f,
             {},
@@ -929,7 +989,17 @@ void Esp::Tick() {
 
         Target &target = updatedTargets.back();
         target.eyeHeightOffset = currentEyeY - target.y;
-        if (getHealthMethodID != nullptr) {
+        if (getEntityIdMethodID != nullptr) {
+            const jint entityId = env->CallIntMethod(playerObj, getEntityIdMethodID);
+            if (env->ExceptionCheck()) {
+                env->ExceptionClear();
+            } else {
+                target.entityId = static_cast<int>(entityId);
+            }
+        }
+
+        if (getHealthMethodID != nullptr &&
+            (livingEntityClass == nullptr || env->IsInstanceOf(playerObj, livingEntityClass))) {
             target.health = env->CallFloatMethod(playerObj, getHealthMethodID);
             if (env->ExceptionCheck()) {
                 env->ExceptionClear();
@@ -937,13 +1007,8 @@ void Esp::Tick() {
             }
         }
 
-        if (getEntityIdMethodID != nullptr) {
-            const jint entityId = env->CallIntMethod(playerObj, getEntityIdMethodID);
-            if (env->ExceptionCheck()) {
-                env->ExceptionClear();
-            } else {
-                target.name = ResolveCachedPlayerName(env, playerObj, static_cast<int>(entityId), currentTick);
-            }
+        if (target.entityId != 0) {
+            target.name = ResolveCachedPlayerName(env, playerObj, target.entityId, currentTick);
         }
 
         env->DeleteLocalRef(playerObj);
@@ -959,7 +1024,6 @@ void Esp::Tick() {
 
     std::scoped_lock lock(stateMutex_);
     targets_.swap(updatedTargets);
-    cameraState_ = updatedCamera;
     debugState_.localPlayerValid = localPlayerValid;
     debugState_.levelValid = levelValid;
     debugState_.playerListValid = playerListValid;
@@ -980,16 +1044,19 @@ void Esp::Tick() {
 void Esp::RenderOverlay(bool drawTracer, bool drawBox, bool showDebug, const float *tracerColor, float tracerThickness,
                         const float *boxColor, float boxThickness) const {
     std::vector<Target> snapshot;
-    CameraState cameraSnapshot{};
     DebugState debugSnapshot{}; {
         std::scoped_lock lock(stateMutex_);
         snapshot = targets_;
-        cameraSnapshot = cameraState_;
         debugSnapshot = debugState_;
     }
 
-    JNIEnv *env = JniEnvironment::GetCurrentEnv();
-    const float frameTime = ReadCurrentFrameTime(env);
+    const RenderCameraState renderCamera = CaptureRenderCameraState();
+    CameraState cameraSnapshot = renderCamera.cameraState;
+    const float frameTime = renderCamera.interpolationAlpha;
+    if (!renderCamera.valid) {
+        return;
+    }
+
     cameraSnapshot.x = Lerp(cameraSnapshot.previousX, cameraSnapshot.x, frameTime);
     cameraSnapshot.y = Lerp(cameraSnapshot.previousY, cameraSnapshot.y, frameTime) + cameraSnapshot.eyeHeightOffset;
     cameraSnapshot.z = Lerp(cameraSnapshot.previousZ, cameraSnapshot.z, frameTime);
@@ -1111,6 +1178,11 @@ void Esp::RenderOverlay(bool drawTracer, bool drawBox, bool showDebug, const flo
                 const float bottom = std::max(headScreenPosition.y, feetScreenPosition.y);
                 const float height = bottom - top;
                 if (height >= 6.0f) {
+                    const bool headFullyOnScreen =
+                        std::abs(headNormalizedX) <= 1.0 && std::abs(headNormalizedY) <= 1.0;
+                    const bool feetFullyOnScreen =
+                        std::abs(feetNormalizedX) <= 1.0 && std::abs(feetNormalizedY) <= 1.0;
+                    const bool targetFullyOnScreen = headFullyOnScreen && feetFullyOnScreen;
                     const float centerX = (headScreenPosition.x + feetScreenPosition.x) * 0.5f;
                     const float halfWidth = height * 0.19f;
                     const double distanceX = interpolatedX - cameraSnapshot.x;
@@ -1118,6 +1190,7 @@ void Esp::RenderOverlay(bool drawTracer, bool drawBox, bool showDebug, const flo
                     const double distanceZ = interpolatedZ - cameraSnapshot.z;
                     const double distanceMeters = std::sqrt(
                         distanceX * distanceX + distanceY * distanceY + distanceZ * distanceZ);
+                    const bool healthDataReliable = targetFullyOnScreen && IsFinite(distanceMeters);
                     const float closeRangeBoost = IsFinite(distanceMeters)
                                                      ? std::clamp(static_cast<float>((6.0 - distanceMeters) / 6.0), 0.0f,
                                                                   1.0f)
@@ -1129,7 +1202,7 @@ void Esp::RenderOverlay(bool drawTracer, bool drawBox, bool showDebug, const flo
                     drawList->AddRect(ImVec2(centerX - halfWidth, top), ImVec2(centerX + halfWidth, bottom),
                                       boxDrawColor, 0.0f, 0, boxLineThickness);
 
-                    if (target.health >= 0.0f && std::isfinite(target.health)) {
+                    if (healthDataReliable && target.health >= 0.0f && std::isfinite(target.health)) {
                         char healthBuffer[32]{};
                         const float healthValue = std::max(target.health, 0.0f);
                         std::snprintf(healthBuffer, sizeof(healthBuffer), "%.0f HP", healthValue);

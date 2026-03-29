@@ -1,12 +1,21 @@
-﻿#include "UiHookManager.hpp"
+#include "UiHookManager.hpp"
 
 #include <cstdint>
 #include <iostream>
 
+#include "../jni/JniEnvironment.hpp"
 #include "MinHook.h"
 
 UiHookManager *UiHookManager::instance_ = nullptr;
 thread_local bool UiHookManager::inSwapHook_ = false;
+std::atomic_uint32_t UiHookManager::lastRenderThreadId_{0};
+std::atomic_uintptr_t UiHookManager::lastWindow_{0};
+std::atomic_uintptr_t UiHookManager::lastRenderContext_{0};
+std::atomic_uint32_t UiHookManager::lastFeatureMask_{0};
+std::atomic_uint32_t UiHookManager::lastRenderStage_{static_cast<uint32_t>(UiHookRenderStage::Idle)};
+std::atomic_bool UiHookManager::lastInsideSwapHook_{false};
+std::atomic_bool UiHookManager::lastMenuInitialized_{false};
+std::atomic_bool UiHookManager::lastShuttingDown_{false};
 
 namespace {
 class CallbackScope {
@@ -37,6 +46,7 @@ bool UiHookManager::Initialize() {
     loggedRenderThreadShutdownWait_ = false;
     loggedSingleHookStrategy_ = false;
     menu_.SetToggleKeyPollingEnabled(true);
+    ResetDebugSnapshot();
 
     const MH_STATUS initStatus = MH_Initialize();
     if (initStatus != MH_OK && initStatus != MH_ERROR_ALREADY_INITIALIZED) {
@@ -135,10 +145,13 @@ void UiHookManager::Shutdown() {
     std::cout << "[UI] Shutdown requested." << std::endl;
     shuttingDown_ = true;
     menu_.SetRunning(false);
+    lastShuttingDown_.store(true, std::memory_order_release);
 
     const bool renderThreadShutdownCompleted = WaitForRenderThreadShutdown();
     if (!renderThreadShutdownCompleted && menu_.IsInitialized()) {
         std::cout << "[!] WARNING: Render-thread shutdown did not complete before unload." << std::endl;
+        espOverlayRenderer_.AbandonContext();
+        menu_.AbandonRendererState(true);
     }
 
     if (minHookInitialized_) {
@@ -169,6 +182,8 @@ void UiHookManager::Shutdown() {
         minHookInitialized_ = false;
     }
 
+    gameplayController_ = nullptr;
+    esp_ = nullptr;
     window_ = nullptr;
     renderContext_ = nullptr;
     ResetObservedRenderTarget();
@@ -181,16 +196,36 @@ void UiHookManager::Shutdown() {
     if (instance_ == this) {
         instance_ = nullptr;
     }
+    ResetDebugSnapshot();
     std::cout << "[UI] Shutdown complete." << std::endl;
 }
 
 void UiHookManager::SetEsp(Esp *esp) {
     std::scoped_lock renderLock(renderMutex_);
+    esp_ = esp;
     menu_.SetEsp(esp);
+}
+
+void UiHookManager::SetGameplayController(GameplayController *controller) {
+    std::scoped_lock renderLock(renderMutex_);
+    gameplayController_ = controller;
 }
 
 ImGuiMenuState UiHookManager::GetStateSnapshot() const {
     return menu_.GetStateSnapshot();
+}
+
+UiHookDebugSnapshot UiHookManager::GetDebugSnapshot() {
+    UiHookDebugSnapshot snapshot;
+    snapshot.renderThreadId = lastRenderThreadId_.load(std::memory_order_acquire);
+    snapshot.window = reinterpret_cast<HWND>(lastWindow_.load(std::memory_order_acquire));
+    snapshot.renderContext = reinterpret_cast<HGLRC>(lastRenderContext_.load(std::memory_order_acquire));
+    snapshot.featureMask = lastFeatureMask_.load(std::memory_order_acquire);
+    snapshot.renderStage = static_cast<UiHookRenderStage>(lastRenderStage_.load(std::memory_order_acquire));
+    snapshot.insideSwapHook = lastInsideSwapHook_.load(std::memory_order_acquire);
+    snapshot.menuInitialized = lastMenuInitialized_.load(std::memory_order_acquire);
+    snapshot.shuttingDown = lastShuttingDown_.load(std::memory_order_acquire);
+    return snapshot;
 }
 
 bool UiHookManager::AttachToWindow(HWND hWnd) {
@@ -324,6 +359,7 @@ bool UiHookManager::PerformRenderThreadShutdown(HGLRC currentContext) {
     }
 
     if (!menu_.IsInitialized()) {
+        espOverlayRenderer_.AbandonContext();
         renderContext_ = nullptr;
         ResetObservedRenderTarget();
         renderThreadShutdownComplete_.store(true, std::memory_order_release);
@@ -334,10 +370,12 @@ bool UiHookManager::PerformRenderThreadShutdown(HGLRC currentContext) {
         std::cout << "[UI] Shutdown observed context mismatch. Abandoning stale renderer context 0x" << std::hex
                   << reinterpret_cast<uintptr_t>(renderContext_) << " from current 0x"
                   << reinterpret_cast<uintptr_t>(currentContext) << std::dec << std::endl;
+        espOverlayRenderer_.AbandonContext();
         menu_.AbandonRendererState(true);
         renderContext_ = nullptr;
         ResetObservedRenderTarget();
         renderThreadShutdownComplete_.store(true, std::memory_order_release);
+        ResetDebugSnapshot();
         return true;
     }
 
@@ -345,16 +383,20 @@ bool UiHookManager::PerformRenderThreadShutdown(HGLRC currentContext) {
     std::cout << "[UI] Performing render-thread shutdown on thread " << GetCurrentThreadId() << " window=0x"
               << std::hex << reinterpret_cast<uintptr_t>(window_) << " context=0x"
               << reinterpret_cast<uintptr_t>(currentContext) << std::dec << std::endl;
+    espOverlayRenderer_.ShutdownForCurrentContext(currentContext);
     menu_.ShutdownForCurrentContext(currentContext, true);
+    JniEnvironment::DetachCurrentThreadIfNeeded();
     renderContext_ = nullptr;
     ResetObservedRenderTarget();
     renderThreadShutdownComplete_.store(true, std::memory_order_release);
+    ResetDebugSnapshot();
     std::cout << "[UI] Render-thread shutdown complete." << std::endl;
     return true;
 }
 
 void UiHookManager::ResetBoundRenderer(bool resetMenuVisibility) {
     if (!menu_.IsInitialized()) {
+        espOverlayRenderer_.AbandonContext();
         renderContext_ = nullptr;
         ResetObservedRenderTarget();
         return;
@@ -362,11 +404,13 @@ void UiHookManager::ResetBoundRenderer(bool resetMenuVisibility) {
 
     const HGLRC currentContext = wglGetCurrentContext();
     if (renderContext_ != nullptr && currentContext == renderContext_) {
+        espOverlayRenderer_.ShutdownForCurrentContext(currentContext);
         menu_.ShutdownForCurrentContext(currentContext, resetMenuVisibility);
     } else {
         std::cout << "[UI] Rebinding renderer from stale context 0x" << std::hex
                   << reinterpret_cast<uintptr_t>(renderContext_) << " to 0x"
                   << reinterpret_cast<uintptr_t>(currentContext) << std::dec << std::endl;
+        espOverlayRenderer_.AbandonContext();
         menu_.AbandonRendererState(resetMenuVisibility);
     }
 
@@ -417,8 +461,14 @@ BOOL UiHookManager::RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn,
     inSwapHook_ = true;
     struct SwapHookReset {
         bool &flag;
-        ~SwapHookReset() { flag = false; }
-    } reset{inSwapHook_};
+        UiHookManager *manager;
+        ~SwapHookReset() {
+            flag = false;
+            if (manager != nullptr) {
+                manager->UpdateDebugSnapshot(manager->menu_.GetStateSnapshot(), false, UiHookRenderStage::Idle);
+            }
+        }
+    } reset{inSwapHook_, this};
 
     std::scoped_lock renderLock(renderMutex_);
 
@@ -426,6 +476,8 @@ BOOL UiHookManager::RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn,
         std::cout << "[UI] Render callback entered for the first time via " << hookName << "." << std::endl;
         loggedFirstRenderCallback_ = true;
     }
+
+    UpdateDebugSnapshot(menu_.GetStateSnapshot(), true, UiHookRenderStage::FrameStart);
 
     const HGLRC currentContext = wglGetCurrentContext();
     if (currentContext == nullptr) {
@@ -472,7 +524,21 @@ BOOL UiHookManager::RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn,
                           << reinterpret_cast<uintptr_t>(renderContext_) << std::dec << std::endl;
             }
 
-            menu_.RenderFrame();
+            const ImGuiMenuState stateSnapshot = menu_.AdvanceFrame(gameplayController_);
+            if (esp_ != nullptr && (stateSnapshot.tracer || stateSnapshot.boxEsp)) {
+                UpdateDebugSnapshot(stateSnapshot, true, UiHookRenderStage::EspRender);
+                const Esp::RenderSnapshot espSnapshot = esp_->GetRenderSnapshot();
+                const Esp::RenderCameraState renderCameraState = esp_->CaptureRenderCameraState();
+                espOverlayRenderer_.Render(currentContext, espSnapshot, renderCameraState,
+                                           stateSnapshot.tracer, stateSnapshot.boxEsp,
+                                           stateSnapshot.tracerColor, stateSnapshot.tracerThickness,
+                                           stateSnapshot.boxColor, stateSnapshot.boxThickness);
+            }
+
+            UpdateDebugSnapshot(stateSnapshot, true, UiHookRenderStage::MenuRender);
+            menu_.RenderVisibleMenu();
+
+            UpdateDebugSnapshot(stateSnapshot, true, UiHookRenderStage::FrameEnd);
         }
     }
 
@@ -511,4 +577,40 @@ LRESULT CALLBACK UiHookManager::HookedWndProc(HWND hWnd, UINT uMsg, WPARAM wPara
     }
 
     return CallWindowProc(instance->originalWndProc_, hWnd, uMsg, wParam, lParam);
+}
+
+uint32_t UiHookManager::BuildFeatureMask(const ImGuiMenuState &state) {
+    uint32_t mask = 0;
+    if (state.fastBreak) mask |= 1u << 0;
+    if (state.fastPlace) mask |= 1u << 1;
+    if (state.sprint) mask |= 1u << 2;
+    if (state.velocity) mask |= 1u << 3;
+    if (state.triggerBot) mask |= 1u << 4;
+    if (state.tracer) mask |= 1u << 5;
+    if (state.boxEsp) mask |= 1u << 6;
+    if (state.espDebug) mask |= 1u << 7;
+    return mask;
+}
+
+void UiHookManager::UpdateDebugSnapshot(const ImGuiMenuState &state, bool insideSwapHook,
+                                        UiHookRenderStage renderStage) {
+    lastRenderThreadId_.store(GetCurrentThreadId(), std::memory_order_release);
+    lastWindow_.store(reinterpret_cast<uintptr_t>(window_), std::memory_order_release);
+    lastRenderContext_.store(reinterpret_cast<uintptr_t>(renderContext_), std::memory_order_release);
+    lastFeatureMask_.store(BuildFeatureMask(state), std::memory_order_release);
+    lastRenderStage_.store(static_cast<uint32_t>(renderStage), std::memory_order_release);
+    lastInsideSwapHook_.store(insideSwapHook, std::memory_order_release);
+    lastMenuInitialized_.store(menu_.IsInitialized(), std::memory_order_release);
+    lastShuttingDown_.store(shuttingDown_.load(std::memory_order_acquire), std::memory_order_release);
+}
+
+void UiHookManager::ResetDebugSnapshot() {
+    lastRenderThreadId_.store(0, std::memory_order_release);
+    lastWindow_.store(0, std::memory_order_release);
+    lastRenderContext_.store(0, std::memory_order_release);
+    lastFeatureMask_.store(0, std::memory_order_release);
+    lastRenderStage_.store(static_cast<uint32_t>(UiHookRenderStage::Idle), std::memory_order_release);
+    lastInsideSwapHook_.store(false, std::memory_order_release);
+    lastMenuInitialized_.store(false, std::memory_order_release);
+    lastShuttingDown_.store(false, std::memory_order_release);
 }

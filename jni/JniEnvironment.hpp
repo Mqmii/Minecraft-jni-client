@@ -8,6 +8,8 @@ public:
     void Shutdown();
 
     [[nodiscard]] static JNIEnv *GetCurrentEnv();
+    [[nodiscard]] static JNIEnv *GetOrAttachCurrentEnv(const char *threadName = "JNI Cheat Render");
+    static void DetachCurrentThreadIfNeeded();
     [[nodiscard]] static JavaVM *GetCurrentVm();
     [[nodiscard]] JNIEnv *GetEnv() const;
     [[nodiscard]] JavaVM *GetVm() const;
@@ -15,6 +17,7 @@ public:
 
 private:
     inline static JavaVM *activeVm_ = nullptr;
+    inline static thread_local bool helperAttachedCurrentThread_ = false;
     JavaVM *vm_ = nullptr;
     JNIEnv *env_ = nullptr;
     bool attached_ = false;

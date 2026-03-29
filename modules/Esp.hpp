@@ -19,6 +19,7 @@ public:
         double x{};
         double y{};
         double z{};
+        int entityId{};
         double eyeHeightOffset{};
         float health{-1.0f};
         std::string name{};
@@ -65,12 +66,25 @@ public:
         uint64_t lastSeenTick{};
     };
 
+    struct RenderCameraState {
+        CameraState cameraState{};
+        float interpolationAlpha{1.0f};
+        bool valid{false};
+    };
+
+    struct RenderSnapshot {
+        std::vector<Target> targets{};
+        DebugState debugState{};
+        bool initialized{false};
+    };
+
     jclass levelClass{};
     jclass listClass{};
     jclass deltaTrackerTimerClass{};
     jclass gameRendererClass{};
     jclass cameraClass{};
     jclass vec3Class{};
+    jclass livingEntityClass{};
     jclass playerClass{};
 
     jfieldID levelField{};
@@ -105,6 +119,9 @@ public:
     ~Esp();
     bool IsInitialized() const;
     void Tick();
+    [[nodiscard]] RenderSnapshot GetRenderSnapshot() const;
+    [[nodiscard]] RenderCameraState CaptureRenderCameraState() const;
+    [[nodiscard]] DebugState GetDebugStateSnapshot() const;
     void RenderOverlay(bool drawTracer, bool drawBox, bool showDebug, const float *tracerColor, float tracerThickness,
                        const float *boxColor, float boxThickness) const;
 
@@ -113,7 +130,7 @@ private:
     void SetStatus(const char *status);
     bool initialized_{false};
     float ReadCurrentFrameTime(JNIEnv *env) const;
-    bool TryReadRenderCameraState(JNIEnv *env, CameraState &renderCamera) const;
+    bool TryReadRenderCameraState(JNIEnv *env, float frameTime, CameraState &renderCamera) const;
     bool HasRenderCameraLookups() const;
     std::string ResolveCachedPlayerName(JNIEnv *env, jobject playerObj, int entityId, uint64_t currentTick);
     std::string QueryPlayerName(JNIEnv *env, jobject playerObj) const;
@@ -123,6 +140,5 @@ private:
     mutable std::mutex stateMutex_;
     std::vector<Target> targets_;
     std::unordered_map<int, NameCacheEntry> nameCache_;
-    CameraState cameraState_{};
     DebugState debugState_{};
 };

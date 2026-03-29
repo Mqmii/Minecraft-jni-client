@@ -20,13 +20,23 @@ namespace mc_mappings {
         inline constexpr const char *Options = "gfo";
         inline constexpr const char *OptionInstance = "gfn";
         inline constexpr const char *Entity = "cgk";
+        inline constexpr const char *LivingEntity = "chl";
         inline constexpr const char *LocalPlayer = "hnh";
         inline constexpr const char *Player = "ddm";
+        inline constexpr const char *Inventory = "ddl";
         inline constexpr const char *GameMode = "hio";
         inline constexpr const char *HitResult = "ftk";
         inline constexpr const char *BlockHitResult = "fti";
         inline constexpr const char *EntityHitResult = "ftj";
         inline constexpr const char *Component = "yh";
+        inline constexpr const char *ItemStack = "dlt";
+        inline constexpr const char *Item = "dlp";
+        inline constexpr const char *AxeItem = "djy";
+        inline constexpr const char *ClientPacketListener = "hig";
+        inline constexpr const char *ClientCommonPacketListenerImpl = "hia";
+        inline constexpr const char *Packet = "aay";
+        inline constexpr const char *ServerboundSetCarriedItemPacket =
+                "ajt";
         inline constexpr const char *JavaList = "java/util/List";
         inline constexpr const char *JavaNumber = "java/lang/Number";
         inline constexpr const char *JavaDouble = "java/lang/Double";
@@ -39,7 +49,7 @@ namespace mc_mappings {
         inline constexpr MemberId GetDeltaTracker{"aD", "()Lgez;"};
         inline constexpr MemberId GameRenderer{"i", "Lhob;"};
         inline constexpr MemberId Options{"k", "Lgfo;"};
-        inline constexpr MemberId LocalPlayer{"s", "Lhnh;"};        
+        inline constexpr MemberId LocalPlayer{"s", "Lhnh;"};
         inline constexpr MemberId HitResult{"u", "Lftk;"};
         inline constexpr MemberId GameMode{"q", "Lhio;"};
         inline constexpr MemberId RightClickDelay{"aR", "I"};
@@ -69,6 +79,10 @@ namespace mc_mappings {
         inline constexpr MemberId AttackStrengthScale{"I", "(F)F"};
         inline constexpr MemberId SetDeltaMovement{"m", "(DDD)V"};
         inline constexpr MemberId HurtTime{"bu", "I"};
+        inline constexpr MemberId Connection{
+            "b",
+            "Lhig;"
+        };
     } // namespace local_player
 
     namespace game_mode {
@@ -78,6 +92,7 @@ namespace mc_mappings {
 
     namespace player {
         inline constexpr MemberId GetHealth{"eZ", "()F"};
+        inline constexpr MemberId GetInventory{"gK", "()Lddl;"};
     } // namespace player
 
     namespace entity_hit_result {
@@ -88,7 +103,7 @@ namespace mc_mappings {
         inline constexpr MemberId GetId{"aA", "()I"};
         inline constexpr MemberId GetName{"ap", "()Lyh;"};
         inline constexpr MemberId IsAlive{"cb", "()Z"};
-        inline constexpr MemberId GetX{"dP", "()D"};        
+        inline constexpr MemberId GetX{"dP", "()D"};
         inline constexpr MemberId GetY{"dR", "()D"};
         inline constexpr MemberId GetEyeY{"dT", "()D"};
         inline constexpr MemberId GetZ{"dV", "()D"};
@@ -98,6 +113,10 @@ namespace mc_mappings {
         inline constexpr MemberId OldY{"Z", "D"};
         inline constexpr MemberId OldZ{"aa", "D"};
     } // namespace entity
+
+    namespace living_entity {
+        inline constexpr MemberId IsBlocking{"gg", "()Z"};
+    } // namespace living_entity
 
     namespace camera {
         inline constexpr MemberId GetPosition{"b", "()Lftm;"};
@@ -126,6 +145,24 @@ namespace mc_mappings {
     namespace component {
         inline constexpr MemberId GetString{"getString", "()Ljava/lang/String;"};
     } // namespace component
+
+    namespace inventory {
+        inline constexpr MemberId GetItem{"a", "(I)Ldlt;"};
+        inline constexpr MemberId Selected{"m", "I"};
+    } // namespace inventory
+
+    namespace item_stack {
+        inline constexpr MemberId IsEmpty{"f", "()Z"};
+        inline constexpr MemberId GetItem{"h", "()Ldlp;"};
+    } // namespace item_stack
+
+    namespace client_common_packet_listener_impl {
+        inline constexpr MemberId Send{"b", "(Laay;)V"};
+    } // namespace client_common_packet_listener_impl
+
+    namespace serverbound_set_carried_item_packet {
+        inline constexpr MemberId Constructor{"<init>", "(I)V"};
+    } // namespace serverbound_set_carried_item_packet
 
     namespace java_list {
         inline constexpr MemberId Size{"size", "()I"};

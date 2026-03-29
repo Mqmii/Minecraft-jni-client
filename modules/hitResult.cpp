@@ -6,19 +6,39 @@
 #include "../classes/minecraft.hpp"
 #include "../jni/JniEnvironment.hpp"
 #include "../jni/MinecraftMappings.hpp"
-#include "click.hpp"
+
+namespace {
+bool ClearHitResultException(JNIEnv *env, const char *context) {
+    if (env == nullptr || !env->ExceptionCheck()) {
+        return false;
+    }
+
+    std::cout << "[TriggerBot] JNI call failed at " << context << std::endl;
+    env->ExceptionClear();
+    return true;
+}
+} // namespace
 
 HitResult::HitResult(Minecraft *p_mc)
-    : env(JniEnvironment::GetCurrentEnv()), mc(p_mc), hitResultClass(nullptr), hitResultFieldID(nullptr) {
+    : mc(p_mc), hitResultClass(nullptr), hitResultFieldID(nullptr) {
+    JNIEnv *env = JniEnvironment::GetOrAttachCurrentEnv("JNI Cheat");
+    if (env == nullptr || mc == nullptr || mc->getMinecraftClass() == nullptr) {
+        return;
+    }
+
     jclass localClass = env->FindClass(mc_mappings::classes::HitResult);
-    hitResultClass = reinterpret_cast<jclass>(env->NewGlobalRef(localClass));
-    env->DeleteLocalRef(localClass);
+    if (localClass != nullptr) {
+        hitResultClass = reinterpret_cast<jclass>(env->NewGlobalRef(localClass));
+        env->DeleteLocalRef(localClass);
+    } else {
+        ClearHitResultException(env, "FindClass(HitResult)");
+    }
 
     hitResultFieldID = env->GetFieldID(
         mc->getMinecraftClass(),
         mc_mappings::minecraft::HitResult.name,
         mc_mappings::minecraft::HitResult.signature);
-    if (hitResultFieldID == nullptr) {
+    if (hitResultFieldID == nullptr || ClearHitResultException(env, "Minecraft.hitResult")) {
         std::cout << "[ERROR] HitResult field ID not found." << std::endl;
     }
 }
@@ -36,14 +56,35 @@ HitResult::~HitResult() {
 }
 
 jobject HitResult::getHitResultObject() const {
-    jobject localinstance = env->GetObjectField(mc->getMcInstance(), hitResultFieldID);
-    return localinstance;
+    JNIEnv *env = JniEnvironment::GetOrAttachCurrentEnv("JNI Cheat Render");
+    if (env == nullptr || mc == nullptr || hitResultFieldID == nullptr || mc->getMcInstance() == nullptr) {
+        return nullptr;
+    }
+
+    jobject hitResultObject = env->GetObjectField(mc->getMcInstance(), hitResultFieldID);
+    if (ClearHitResultException(env, "Minecraft.hitResult read")) {
+        if (hitResultObject != nullptr) {
+            env->DeleteLocalRef(hitResultObject);
+        }
+        return nullptr;
+    }
+    return hitResultObject;
 }
 
 BlockHitResult::BlockHitResult(Minecraft *p_mc) : HitResult(p_mc) {
-    jclass localclass = env->FindClass(mc_mappings::classes::BlockHitResult);
-    clsBlockHitresult = reinterpret_cast<jclass>(env->NewGlobalRef(localclass));
-    env->DeleteLocalRef(localclass);
+    JNIEnv *env = JniEnvironment::GetOrAttachCurrentEnv("JNI Cheat");
+    if (env == nullptr) {
+        return;
+    }
+
+    jclass localClass = env->FindClass(mc_mappings::classes::BlockHitResult);
+    if (localClass != nullptr) {
+        clsBlockHitresult = reinterpret_cast<jclass>(env->NewGlobalRef(localClass));
+        env->DeleteLocalRef(localClass);
+    } else {
+        ClearHitResultException(env, "FindClass(BlockHitResult)");
+    }
+
     if (clsBlockHitresult == nullptr) {
         std::cout << "[ERROR] BlockHitResult class not found." << std::endl;
     }
@@ -62,68 +103,85 @@ BlockHitResult::~BlockHitResult() {
 }
 
 void BlockHitResult::isBlock() const {
-    jobject hitresultobj = getHitResultObject();
-    if (env->IsInstanceOf(hitresultobj, clsBlockHitresult)) {
+    JNIEnv *env = JniEnvironment::GetOrAttachCurrentEnv("JNI Cheat Render");
+    if (env == nullptr || clsBlockHitresult == nullptr) {
+        return;
+    }
+
+    jobject hitResultObj = getHitResultObject();
+    if (hitResultObj != nullptr && env->IsInstanceOf(hitResultObj, clsBlockHitresult)) {
         std::cout << "[DEBUG] Block target detected." << std::endl;
     } else {
         std::cout << "[DEBUG] Target is not a block." << std::endl;
     }
-    env->DeleteLocalRef(hitresultobj);
+    if (hitResultObj != nullptr) {
+        env->DeleteLocalRef(hitResultObj);
+    }
 }
 
 EntityHitResult::EntityHitResult(Minecraft *p_mc) : HitResult(p_mc) {
-    jclass localclass = env->FindClass(mc_mappings::classes::EntityHitResult);
-    if (localclass == nullptr) {
+    JNIEnv *env = JniEnvironment::GetOrAttachCurrentEnv("JNI Cheat");
+    if (env == nullptr) {
+        return;
+    }
+
+    jclass localHitResultClass = env->FindClass(mc_mappings::classes::EntityHitResult);
+    if (localHitResultClass == nullptr) {
+        ClearHitResultException(env, "FindClass(EntityHitResult)");
         std::cout << "[ERROR] EntityHitResult class not found." << std::endl;
+    } else {
+        clsEntityHitResult = reinterpret_cast<jclass>(env->NewGlobalRef(localHitResultClass));
+        env->DeleteLocalRef(localHitResultClass);
     }
-    clsEntityHitResult = reinterpret_cast<jclass>(env->NewGlobalRef(localclass));
-    env->DeleteLocalRef(localclass);
-    getEntityMethodID = env->GetMethodID(
-        clsEntityHitResult,
-        mc_mappings::entity_hit_result::GetEntity.name,
-        mc_mappings::entity_hit_result::GetEntity.signature);
-    if (getEntityMethodID == nullptr) std::cout << "[ERROR] getEntity method ID not found." << std::endl;
 
-    jclass localPlayer = env->FindClass(mc_mappings::classes::Player);
-    if (localPlayer == nullptr) std::cout << "[ERROR] Player class not found." << std::endl;
-    clsPlayer = reinterpret_cast<jclass>(env->NewGlobalRef(localPlayer));
-    env->DeleteLocalRef(localPlayer);
-    jclass localEntity = env->FindClass(mc_mappings::classes::Entity);
-    if (!localEntity) std::cout << "[ERROR] Entity class not found." << std::endl;
-    getNameMethodID = env->GetMethodID(
-        localEntity,
-        mc_mappings::entity::GetName.name,
-        mc_mappings::entity::GetName.signature);
-    if (getNameMethodID == nullptr) std::cout << "[ERROR] getName method ID not found." << std::endl;
-    env->DeleteLocalRef(localEntity);
-
-    jclass localComponent = env->FindClass(mc_mappings::classes::Component);
-    if (localComponent == nullptr) std::cout << "[ERROR] Component class not found." << std::endl;
-    getStringMethodID = env->GetMethodID(
-        localComponent,
-        mc_mappings::component::GetString.name,
-        mc_mappings::component::GetString.signature);
-    if (getStringMethodID == nullptr) std::cout << "[ERROR] getString method ID not found." << std::endl;
-    jclass localentitycls = env->FindClass(mc_mappings::classes::Entity);
-    if (localentitycls == nullptr) {
+    jclass localEntityClass = env->FindClass(mc_mappings::classes::Entity);
+    if (localEntityClass == nullptr) {
+        ClearHitResultException(env, "FindClass(Entity)");
         std::cout << "[ERROR] Entity class not found." << std::endl;
+    } else {
+        clsEntity = reinterpret_cast<jclass>(env->NewGlobalRef(localEntityClass));
+        env->DeleteLocalRef(localEntityClass);
     }
-    clsEntity = reinterpret_cast<jclass>(env->NewGlobalRef(localentitycls));
-    mid_isAlive = env->GetMethodID(
-        clsEntity,
-        mc_mappings::entity::IsAlive.name,
-        mc_mappings::entity::IsAlive.signature);
-    if (mid_isAlive == nullptr) {
-        std::cout << "[ERROR] isAlive method not found." << std::endl;
+
+    if (clsEntityHitResult != nullptr) {
+        getEntityMethodID = env->GetMethodID(
+            clsEntityHitResult,
+            mc_mappings::entity_hit_result::GetEntity.name,
+            mc_mappings::entity_hit_result::GetEntity.signature);
+        if (getEntityMethodID == nullptr || ClearHitResultException(env, "EntityHitResult.getEntity")) {
+            std::cout << "[ERROR] getEntity method ID not found." << std::endl;
+        }
     }
-    startAttackMethodID = env->GetMethodID(
-        Minecraft::getMinecraftClass(),
-        mc_mappings::minecraft::StartAttack.name,
-        mc_mappings::minecraft::StartAttack.signature);
-    if (startAttackMethodID == nullptr) {
-        std::cout << "[ERROR] Start Attack Method is missing!" << std::endl;
+
+    if (clsEntity != nullptr) {
+        mid_isAlive = env->GetMethodID(
+            clsEntity,
+            mc_mappings::entity::IsAlive.name,
+            mc_mappings::entity::IsAlive.signature);
+        if (mid_isAlive == nullptr || ClearHitResultException(env, "Entity.isAlive")) {
+            std::cout << "[ERROR] isAlive method not found." << std::endl;
+        }
     }
-    env->DeleteLocalRef(localComponent);
+
+    if (Minecraft::getMinecraftClass() != nullptr) {
+        startAttackMethodID = env->GetMethodID(
+            Minecraft::getMinecraftClass(),
+            mc_mappings::minecraft::StartAttack.name,
+            mc_mappings::minecraft::StartAttack.signature);
+        if (startAttackMethodID == nullptr || ClearHitResultException(env, "Minecraft.startAttack")) {
+            std::cout << "[ERROR] StartAttack method is missing!" << std::endl;
+        }
+    }
+
+    if (LocalPlayer::getLocalPlayerClass() != nullptr) {
+        attackStrengthMethodID = env->GetMethodID(
+            LocalPlayer::getLocalPlayerClass(),
+            mc_mappings::local_player::AttackStrengthScale.name,
+            mc_mappings::local_player::AttackStrengthScale.signature);
+        if (attackStrengthMethodID == nullptr || ClearHitResultException(env, "LocalPlayer.attackStrengthScale")) {
+            std::cout << "[ERROR] getAttackStrength method not found." << std::endl;
+        }
+    }
 }
 
 EntityHitResult::~EntityHitResult() {
@@ -136,10 +194,6 @@ EntityHitResult::~EntityHitResult() {
         currentEnv->DeleteGlobalRef(clsEntityHitResult);
         clsEntityHitResult = nullptr;
     }
-    if (clsPlayer != nullptr) {
-        currentEnv->DeleteGlobalRef(clsPlayer);
-        clsPlayer = nullptr;
-    }
     if (clsEntity != nullptr) {
         currentEnv->DeleteGlobalRef(clsEntity);
         clsEntity = nullptr;
@@ -147,66 +201,62 @@ EntityHitResult::~EntityHitResult() {
 }
 
 void EntityHitResult::isEntity() const {
-    jobject obj_hitresult = getHitResultObject();
-    if (!env->IsInstanceOf(obj_hitresult, clsEntityHitResult)) {
-        env->DeleteLocalRef(obj_hitresult);
+    JNIEnv *env = JniEnvironment::GetOrAttachCurrentEnv("JNI Cheat Render");
+    if (env == nullptr || clsEntityHitResult == nullptr || getEntityMethodID == nullptr || mid_isAlive == nullptr ||
+        startAttackMethodID == nullptr || Minecraft::getMcInstance() == nullptr) {
         return;
     }
-    jobject entity = env->CallObjectMethod(obj_hitresult, getEntityMethodID);
-    if (entity == nullptr) {
-        env->DeleteLocalRef(obj_hitresult);
-        return;
-    }
-    bool isalive = env->CallBooleanMethod(entity, mid_isAlive);
 
-    if (!env->IsInstanceOf(entity, clsPlayer)) {
-        if (isAttackReady() and isalive) {
-            env->CallBooleanMethod(Minecraft::getMcInstance(), startAttackMethodID);
+    jobject hitResultObj = getHitResultObject();
+    if (hitResultObj == nullptr || !env->IsInstanceOf(hitResultObj, clsEntityHitResult)) {
+        if (hitResultObj != nullptr) {
+            env->DeleteLocalRef(hitResultObj);
         }
-        env->DeleteLocalRef(entity);
-        env->DeleteLocalRef(obj_hitresult);
         return;
     }
 
-    jobject componentObj = env->CallObjectMethod(entity, getNameMethodID);
-    if (componentObj == nullptr) {
-        std::cout << "[ERROR] Component object not found." << std::endl;
-        env->DeleteLocalRef(entity);
-        env->DeleteLocalRef(obj_hitresult);
+    jobject entity = env->CallObjectMethod(hitResultObj, getEntityMethodID);
+    if (entity == nullptr || ClearHitResultException(env, "EntityHitResult.getEntity call")) {
+        if (entity != nullptr) {
+            env->DeleteLocalRef(entity);
+        }
+        env->DeleteLocalRef(hitResultObj);
         return;
     }
 
-    auto nameJstr = reinterpret_cast<jstring>(env->CallObjectMethod(componentObj, getStringMethodID));
-    if (nameJstr == nullptr) std::cout << "[ERROR] Player name string is null." << std::endl;
-    const char *nameChars = env->GetStringUTFChars(nameJstr, nullptr);
-    std::string playerName(nameChars);
-    env->ReleaseStringUTFChars(nameJstr, nameChars);
-    std::cout << "[DEBUG] Player name: " << playerName << std::endl;
-    //Todo: isFriend check
-    if (isAttackReady() and isalive) {
+    const bool isAlive = env->CallBooleanMethod(entity, mid_isAlive) == JNI_TRUE;
+    if (ClearHitResultException(env, "Entity.isAlive call")) {
+        env->DeleteLocalRef(entity);
+        env->DeleteLocalRef(hitResultObj);
+        return;
+    }
+
+    if (isAlive && isAttackReady()) {
         env->CallBooleanMethod(Minecraft::getMcInstance(), startAttackMethodID);
+        ClearHitResultException(env, "Minecraft.startAttack call");
     }
+
     env->DeleteLocalRef(entity);
-    env->DeleteLocalRef(componentObj);
-    env->DeleteLocalRef(obj_hitresult);
-    env->DeleteLocalRef(nameJstr);
+    env->DeleteLocalRef(hitResultObj);
 }
 
 bool EntityHitResult::isAttackReady() const {
-    jmethodID mid_GetStregth = env->GetMethodID(
-        LocalPlayer::getLocalPlayerClass(),
-        mc_mappings::local_player::AttackStrengthScale.name,
-        mc_mappings::local_player::AttackStrengthScale.signature);
-    if (mid_GetStregth == nullptr) {
-        std::cout << "[ERROR] getAttackStrength method not found." << std::endl;
+    JNIEnv *env = JniEnvironment::GetOrAttachCurrentEnv("JNI Cheat Render");
+    if (env == nullptr || attackStrengthMethodID == nullptr) {
         return false;
     }
+
     jobject localPlayer = LocalPlayer::getLocalPlayerObject();
     if (localPlayer == nullptr) {
         return false;
     }
 
-    float strength = env->CallFloatMethod(localPlayer, mid_GetStregth, 0.0f);
+    const float strength = env->CallFloatMethod(localPlayer, attackStrengthMethodID, 0.0f);
+    if (ClearHitResultException(env, "LocalPlayer.getAttackStrengthScale")) {
+        env->DeleteLocalRef(localPlayer);
+        return false;
+    }
+
     env->DeleteLocalRef(localPlayer);
     return strength >= 1.0f;
 }

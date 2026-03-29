@@ -82,6 +82,46 @@ JNIEnv *JniEnvironment::GetCurrentEnv() {
     return status == JNI_OK ? env : nullptr;
 }
 
+JNIEnv *JniEnvironment::GetOrAttachCurrentEnv(const char *threadName) {
+    if (activeVm_ == nullptr) {
+        return nullptr;
+    }
+
+    JNIEnv *env = nullptr;
+    const jint status = activeVm_->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_8);
+    if (status == JNI_OK) {
+        return env;
+    }
+    if (status != JNI_EDETACHED) {
+        return nullptr;
+    }
+
+    JavaVMAttachArgs attachArgs{};
+    attachArgs.version = JNI_VERSION_1_8;
+    attachArgs.name = const_cast<char *>(threadName != nullptr ? threadName : "JNI Cheat Render");
+    attachArgs.group = nullptr;
+
+    const jint attachStatus = activeVm_->AttachCurrentThread(reinterpret_cast<void **>(&env), &attachArgs);
+    if (attachStatus != JNI_OK) {
+        return nullptr;
+    }
+
+    helperAttachedCurrentThread_ = true;
+    std::cout << "[JNI] Lazily attached thread " << GetCurrentThreadId() << " as '"
+              << (threadName != nullptr ? threadName : "JNI Cheat Render") << "'." << std::endl;
+    return env;
+}
+
+void JniEnvironment::DetachCurrentThreadIfNeeded() {
+    if (!helperAttachedCurrentThread_ || activeVm_ == nullptr) {
+        return;
+    }
+
+    activeVm_->DetachCurrentThread();
+    helperAttachedCurrentThread_ = false;
+    std::cout << "[JNI] Detached lazily attached thread " << GetCurrentThreadId() << "." << std::endl;
+}
+
 JavaVM *JniEnvironment::GetCurrentVm() {
     return activeVm_;
 }

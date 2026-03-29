@@ -7,6 +7,7 @@
 #include <string>
 
 #include "../modules/Esp.hpp"
+#include "UiHookManager.hpp"
 #include "imgui.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_win32.h"
@@ -331,7 +332,39 @@ void ImGuiMenu::DrawMenu() {
         ImGui::SliderFloat("Box Thickness", &state_.boxThickness, 0.5f, 6.0f, "%.2f");
     }
 
+    if (state_.espDebug) {
+        DrawEspDebugSection();
+    }
+
     ImGui::End();
+}
+
+void ImGuiMenu::DrawEspDebugSection() const {
+    if (esp_ == nullptr) {
+        ImGui::Separator();
+        ImGui::TextDisabled("ESP debug unavailable.");
+        return;
+    }
+
+    const Esp::DebugState debugState = esp_->GetDebugStateSnapshot();
+    ImGui::Separator();
+    ImGui::Text("ESP Debug");
+    ImGui::Text("init=%d local=%d level=%d list=%d cam=%d rcam=%d/%d",
+                debugState.initialized ? 1 : 0,
+                debugState.localPlayerValid ? 1 : 0,
+                debugState.levelValid ? 1 : 0,
+                debugState.playerListValid ? 1 : 0,
+                debugState.cameraValid ? 1 : 0,
+                debugState.renderCameraAvailable ? 1 : 0,
+                debugState.renderCameraUsed ? 1 : 0);
+    ImGui::Text("players=%d targets=%d", debugState.playerCount, debugState.targetCount);
+    ImGui::Text("cam xyz=%.2f %.2f %.2f", debugState.cameraX, debugState.cameraY, debugState.cameraZ);
+    ImGui::Text("yaw/pitch/fov=%.2f %.2f %.2f",
+                debugState.yawDegrees, debugState.pitchDegrees, debugState.fovDegrees);
+    ImGui::TextWrapped("%s", debugState.lastStatus.c_str());
+    if (!debugState.lookupDetails.empty()) {
+        ImGui::TextWrapped("%s", debugState.lookupDetails.c_str());
+    }
 }
 
 void ImGuiMenu::DrawModuleStatusOverlay() const {
@@ -374,9 +407,9 @@ void ImGuiMenu::DrawTriggerBotHotkeyControl() {
     }
 }
 
-void ImGuiMenu::RenderFrame() {
+ImGuiMenuState ImGuiMenu::AdvanceFrame(GameplayController *gameplayController) {
     if (!initialized_) {
-        return;
+        return {};
     }
 
     BindContext();
@@ -386,21 +419,26 @@ void ImGuiMenu::RenderFrame() {
     }
 
     UpdateToggleState();
+    const ImGuiMenuState stateSnapshot = GetStateSnapshot();
+    if (gameplayController != nullptr) {
+        gameplayController->OnRenderFrame(stateSnapshot);
+    }
+
+    return stateSnapshot;
+}
+
+void ImGuiMenu::RenderVisibleMenu() {
+    if (!initialized_) {
+        return;
+    }
+
+    BindContext();
 
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
     DrawModuleStatusOverlay();
-
-    const ImGuiMenuState stateSnapshot = GetStateSnapshot();
-    if (esp_ != nullptr && (stateSnapshot.tracer || stateSnapshot.boxEsp || stateSnapshot.espDebug)) {
-        esp_->Tick();
-        esp_->RenderOverlay(stateSnapshot.tracer, stateSnapshot.boxEsp, stateSnapshot.espDebug,
-                            stateSnapshot.tracerColor, stateSnapshot.tracerThickness, stateSnapshot.boxColor,
-                            stateSnapshot.boxThickness);
-    }
-
     if (showMenu_) {
         DrawMenu();
     }
@@ -518,6 +556,10 @@ void ImGuiMenu::SetRunning(bool running) {
 
 bool ImGuiMenu::IsInitialized() const {
     return initialized_;
+}
+
+bool ImGuiMenu::IsMenuVisible() const {
+    return showMenu_;
 }
 
 HGLRC ImGuiMenu::RenderContext() const {

@@ -6,7 +6,6 @@ class Minecraft;
 
 class HitResult {
 protected:
-    JNIEnv *env{};
     Minecraft *mc{};
     jclass hitResultClass{};
     jfieldID hitResultFieldID{};
@@ -32,15 +31,13 @@ public:
 class EntityHitResult : public HitResult {
 public:
     jclass clsEntityHitResult{};
-    jclass clsPlayer{};
     jclass clsEntity{};
 
     jobject obj_EntityHitResult{};
 
     jmethodID getEntityMethodID{};
-    jmethodID getNameMethodID{};
-    jmethodID getStringMethodID{};
     jmethodID startAttackMethodID{};
+    jmethodID attackStrengthMethodID{};
     jmethodID mid_isAlive{};
 
     explicit EntityHitResult(Minecraft *p_mc);

@@ -4,6 +4,7 @@
 #include <windows.h>
 
 class Esp;
+class GameplayController;
 struct ImGuiContext;
 
 struct ImGuiMenuState {
@@ -27,13 +28,15 @@ public:
     bool Initialize(HWND window, HGLRC renderContext);
     bool ShutdownForCurrentContext(HGLRC currentContext, bool resetMenuVisibility = true);
     void AbandonRendererState(bool resetMenuVisibility = false);
-    void RenderFrame();
+    ImGuiMenuState AdvanceFrame(GameplayController *gameplayController);
+    void RenderVisibleMenu();
     bool HandleWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     void SetEsp(Esp *esp);
     void SetToggleKeyPollingEnabled(bool enabled);
     void SetRunning(bool running);
 
     bool IsInitialized() const;
+    bool IsMenuVisible() const;
     HGLRC RenderContext() const;
     ImGuiMenuState GetStateSnapshot() const;
 
@@ -47,6 +50,7 @@ private:
     void DrawModuleStatusOverlay() const;
     void DrawMenu();
     void DrawTriggerBotHotkeyControl();
+    void DrawEspDebugSection() const;
     bool TryBindTriggerBotHotkey(UINT uMsg, WPARAM wParam);
 
     bool initialized_ = false;
