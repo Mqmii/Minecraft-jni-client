@@ -525,6 +525,14 @@ BOOL UiHookManager::RenderMenuAndCallOriginal(HDC hDc, SwapBuffersFn originalFn,
             }
 
             const ImGuiMenuState stateSnapshot = menu_.AdvanceFrame(gameplayController_);
+            const bool espActive = stateSnapshot.tracer || stateSnapshot.boxEsp || stateSnapshot.espDebug;
+            if (esp_ != nullptr && espActive) {
+                // Keep ESP sampling on the render thread so target snapshots stay aligned with the
+                // exact frame that will render the overlay. This removes the phase drift that
+                // becomes noticeable when targets move faster, such as while sprinting.
+                esp_->Tick();
+            }
+
             if (esp_ != nullptr && (stateSnapshot.tracer || stateSnapshot.boxEsp)) {
                 UpdateDebugSnapshot(stateSnapshot, true, UiHookRenderStage::EspRender);
                 const Esp::RenderSnapshot espSnapshot = esp_->GetRenderSnapshot();

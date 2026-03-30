@@ -117,18 +117,10 @@ DWORD WINAPI MainThread(LPVOID moduleHandle) {
         uiHookManager.SetGameplayController(&gameplayController);
 
         std::cout << "[BOOT] Entering main feature loop." << std::endl;
-        uint64_t lastEspTick = 0;
         while ((GetAsyncKeyState(VK_DELETE) & 0x8000) == 0) {
             const ImGuiMenuState menuState = uiHookManager.GetStateSnapshot();
             if (!menuState.running) {
                 break;
-            }
-
-            const bool espActive = menuState.tracer || menuState.boxEsp || menuState.espDebug;
-            const uint64_t now = GetTickCount64();
-            if (espActive && (lastEspTick == 0 || (now - lastEspTick) >= 16)) {
-                esp.Tick();
-                lastEspTick = now;
             }
 
             Sleep(10);

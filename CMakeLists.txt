@@ -56,5 +56,5 @@ target_include_directories(MinecraftWrapperJNI PRIVATE
 )
 
 if(WIN32)
-    target_link_libraries(MinecraftWrapperJNI PRIVATE kernel32 user32 opengl32 gdi32 dwmapi)
+    target_link_libraries(MinecraftWrapperJNI PRIVATE kernel32 user32 opengl32 gdi32 dwmapi dbghelp)
 endif()
